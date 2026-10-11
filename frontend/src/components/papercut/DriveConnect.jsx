@@ -17,7 +17,7 @@ const DriveDialog = ({ st, setSt, open, onOpenChange }) => {
   useEffect(() => { if (open) { setLink(st.root_link || ""); setPath(st.root_path || ""); } }, [open, st.root_link, st.root_path]);
   const run = async (k, fn) => { setBusy(k); try { await fn(); } catch (e) { toast.error(e.response?.data?.detail || "Something went wrong"); } setBusy(""); };
   const save = () => run("save", async () => {
-    await saveDriveSettings(link, path);
+    const r = await saveDriveSettings(link, path);
     setSt(await driveStatus());
     toast.success(r.checked ? "Folder found and saved" : "Saved. It will be checked once Drive is connected");
   });

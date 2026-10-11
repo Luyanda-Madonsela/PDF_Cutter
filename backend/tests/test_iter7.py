@@ -255,7 +255,7 @@ def test_drive_status_not_connected():
     assert r.status_code == 200
     body = r.json()
     assert body["connected"] is False
-    assert "root" in body and body["root"].startswith("My Drive/")
+    assert "root" in body and (body["root"].startswith("My Drive/") or body["root"].startswith("[linked folder]"))
 
 
 def test_drive_connect_returns_oauth_url():

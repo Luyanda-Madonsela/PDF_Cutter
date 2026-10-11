@@ -78,7 +78,8 @@ def show_root(st: dict) -> str:
 async def connect(user: User = Depends(require_user)):
     state = secrets.token_urlsafe(24)
     await db.drive_states.insert_one({"_id": state, "user_email": user.email, "created_at": datetime.now(timezone.utc)})
-    url, _ = _flow(SCOPES).authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent", state=state)
+    url, _ = _flow(SCOPES).authorization_url(access_type="offline", include_granted_scopes="true", prompt="select_account consent",
+                                             state=state, login_hint=os.environ["GOOGLE_DRIVE_ACCOUNT"])
     return {"authorization_url": url}
 
 

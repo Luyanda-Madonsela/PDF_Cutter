@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 9 end-to-end: wrote /app/backend/tests/test_iter9.py (17 tests, all pass) covering: (1) PUT /api/drive/settings — both-empty -> 400, non-Drive link -> 400, 'https://drive.google.com/drive/u/1/folders/<id>' is parsed to root_id, raw ID accepted, and the real folder link https://drive.google.com/drive/folders/1Rbo3-EfjwO3mufbN12jU514FPfd9ur2i + 'CAPS & IEB Past Papers' is restored at the end — GET /api/drive/status returns root_id/root_path/root_link; (2) Drive import endpoints with Drive not connected: GET /drive/search, POST /drive/import (with and without empty list), POST /drive/scan all return 400 'Connect Google Drive first'; GET /drive/import-status returns {status: 'idle'} or last; all require auth (401 without), tested via a fresh requests.Session to bypass test_papercut_api.py's module-level monkey-patch; (3) drive.root_path() returns ['id:1Rbo3...', 'CAPS & IEB Past Papers'] (verified via subprocess) and drive.plan_base uses 'id:<paper_folder_id>' for jobs with drive_source and drops PDFs with drive_source from plan_uploads (verified by crafting an in-memory Job in subprocess so motor stays loop-happy); (4) Undo-crop on cloned IEB PhysicalSciences_Gr12_2023_Nov_IEB_P2_TEST set — initial undo -> 400 'No earlier crop'; PUT /jobs/{qp}/questions/{qid} {parts:<shrunk>} creates crop_history length 1 containing the original parts; POST .../undo-crop restores the parts, empties crop_history and changes storage_path; second undo -> 400; erase apply preserves crop_history. (5) Full regression (pytest tests/): 90 passed / 3 failed / 2 skipped (the 3 failures are the same pre-existing Mathematics_Gr12_2024_Nov_National_P1 seed drift documented in iter 5-8). Updated test_iter7.py::test_drive_status_not_connected to accept the new '[linked folder]/...' root display when a folder link is set (was asserting 'My Drive/...' which no longer holds after iter9). Frontend Playwright (cookie-authed session_token=test_session_qa_papercut): header mode-drive-button opens drive-import-panel with drive-search-input, drive-search-button, drive-scan-limit (200), drive-scan-button; search and scan each fired toast 'Connect Google Drive first' (API returned 400 as expected). Drive settings dialog via drive-connect-button: drive-link-input prefilled with 'https://drive.google.com/drive/folders/1Rbo3-EfjwO3mufbN12jU514FPfd9ur2i' and drive-root-input prefilled 'CAPS & IEB Past Papers'; drive-root-save-button fired PUT /api/drive/settings -> 200 but UI toast showed 'Something went wrong' — RCA: ReferenceError on undefined `r` at DriveConnect.jsx:22 (`r.checked ? ... : ...`); the save() handler awaited saveDriveSettings without storing the result. FIXED in place: `const r = await saveDriveSettings(link, path);`. On cloned set in question dialog Adjust-crop tab: crop-undo-button initially disabled, crop-undo-saved-button absent (no history); dragging crop-handle-top-0 enables crop-undo-button with text 'Undo (1)'; clicking it reverts (text 'Undo', disabled again). In Erase tab, drawing on erase-canvas-{page} creates erase-manual-0 with erase-manual-handle-se-0 and erase-manual-remove-0 present. Clone soft-deleted at end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "test_papercut_api.py (iter 5 carry-over)", "issue": "Mathematics_Gr12_2024_Nov_National_P1 remains at 1 QP question from the destructive merge/delete test — 3 failures (test_set_detail_structure, test_expected_links, test_set_zip_filenames_width) still 'assert 7 == 1'. Not iter9-related."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "DriveConnect.jsx (save handler)", "issue": "ReferenceError: `r` is not defined on line 22 — `toast.success(r.checked ? ... : ...)` without storing the awaited result; caught by run()'s try/catch and surfaces as generic 'Something went wrong' toast even when PUT /api/drive/settings returns 200. FIXED by introducing `const r = await saveDriveSettings(link, path);`.", "selector": "drive-root-save-button", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter9.py",
+    "/app/backend/tests/test_iter7.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(pre-existing from iter 5) Reseed the Mathematics_Gr12_2024_Nov_National_P1 set or make the destructive test in test_papercut_api.py self-revert so the 3 lingering failures clear.",
+    "(review) DriveConnect.jsx save() fix was applied by the testing agent — main agent should verify it was the intended fix (storing the response); the toast success message now reads 'Saved. It will be checked once Drive is connected' when Drive is not connected."
+  ],
+  "critical_code_review_comments": [
+    "drive_import.py::import_files calls service_or_400() BEFORE checking body.file_ids, which is correct for a 'connect Drive first' hint — but once connected an empty list only then yields 400 'Pick at least one PDF'. OK.",
+    "drive_import.py::run_import for scan mode calls `_list(svc, PDF_Q, token, 1000)` which already excludes PDFs tagged with appProperties.papercut=1, then also filters out already-imported file_ids via imported_ids(batch). Good double guard.",
+    "drive.save_settings: body.root_link whitespace-only ('   ') is falsy via strip(), so split_path(root_path) alone must have parts. OK. Non-Drive link ('https://example.com/foo') rightly rejected.",
+    "drive.folder_id_from accepts raw 10+ char id. A 10-char path like 'MyFolder12' with no slash would be accepted as a Drive id; low risk because this is only reached when root_link.strip() is set.",
+    "routes.update_question appends q.parts to crop_history only when body.parts is set (crop change) — erase/decide path explicitly preserves crop_history (good). crop_history is unbounded in code; task spec says max 20 but no slicing visible. Verify slicing lives elsewhere or add `(q.crop_history + [q.parts])[-20:]` in update_question.",
+    "DriveConnect.jsx::save was broken (undefined `r`) causing every settings save to show 'Something went wrong' despite 200 OK — now fixed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9.py (NEW)",
+    "/app/backend/tests/test_iter7.py (test_drive_status_not_connected now accepts '[linked folder]/...' root)",
+    "/app/frontend/src/components/papercut/DriveConnect.jsx (fixed undefined `r` in save handler)"
+  ],
+  "success_rate": {"backend": "100% iter9 (17/17); 97% full suite (90 passed / 3 pre-existing failed / 2 skipped)", "frontend": "100% of iter9 testids verified (drive-import-panel, drive-search-input/button toast, drive-scan-limit/button toast, drive-settings-dialog with prefilled drive-link-input + drive-root-input, drive-root-save-button after fix, crop-undo-button enable+count+disable cycle, crop-undo-saved-button absent-when-no-history, erase-manual-0/handle-se-0/remove-0 all present after draw)"},
+  "test_credentials": "Bearer / cookie: test_session_qa_papercut (user test-user-qa).",
+  "seed_data_creation": "Transient only: cloned set dda93178-9e5d-43fa-b16d-9aa37a136112 (PhysicalSciences_Gr12_2023_Nov_IEB_P2_TEST) via tests/clone_set.py, used for undo-crop + frontend crop/erase tests, then soft-deleted (sets.is_deleted=true, jobs.is_deleted=true). Original Drive root (link to 1Rbo3-EfjwO3mufbN12jU514FPfd9ur2i + 'CAPS & IEB Past Papers') restored.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && PYTHONPATH=. python3 -m pytest tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml (~1.5-2.5 min). Expected: 90 pass / 3 pre-existing Math-set failures / 2 skipped. If writing new TestAuth-style no-auth tests, DO NOT use the module-level `requests.get/post` — test_papercut_api.py monkey-patches them to always inject the QA Bearer, so your 401 assertions silently become 200/400. Use a fresh `requests.Session()` instance (session.get/post uses instance-level methods, bypasses the patch). Clone the IEB PhysicalSciences set with tests/clone_set.py when a mutable done-set is needed; soft-delete via setting is_deleted=True on sets+jobs when done. The DriveConnect.jsx save handler was patched to fix the undefined-`r` ReferenceError.",
+  "rca of the issue": "DriveConnect.jsx::save (line 22) referenced an undefined local `r` — `toast.success(r.checked ? ... : ...)` was presumably refactored from `const r = await saveDriveSettings(link, path);` but the assignment was dropped, leaving a dangling `r.checked`. ReferenceError propagated out of the async callback, was caught by run()'s try/catch, and produced the generic 'Something went wrong' toast on every save regardless of HTTP status. Fix: reinstate `const r = await saveDriveSettings(link, path);`. Reproduction: open drive-connect-button -> drive-settings-dialog -> drive-root-save-button; without the fix every save shows error toast even though PUT /api/drive/settings returns 200. With the fix: 'Saved. It will be checked once Drive is connected' (Drive currently not connected => checked=false)."
+}

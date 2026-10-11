@@ -1,6 +1,7 @@
 import { Scissors } from "lucide-react";
 import { PC } from "@/constants/testIds";
 import { UserMenu } from "./UserMenu";
+import { AiBadge } from "./AiSettings";
 
 const MODES = [["single", "One paper"], ["bulk", "Bulk upload"], ["drive", "From Drive"]];
 
@@ -24,10 +25,7 @@ export const Header = ({ mode, onMode }) => (
           </button>
         ))}
       </nav>
-      <div data-testid={PC.modelBadge} className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full border border-[var(--pc-border)] font-mono text-xs text-[var(--pc-text2)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--pc-emerald)] animate-pulse" />
-        gemini-3-flash
-      </div>
+      <AiBadge />
       <UserMenu />
     </div>
   </header>

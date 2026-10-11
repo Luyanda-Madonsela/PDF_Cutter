@@ -54,6 +54,9 @@ export const driveScan = (limit) => axios.post(`${API}/drive/scan`, { limit }).t
 export const driveImportStatus = () => axios.get(`${API}/drive/import-status`).then(data);
 export const recropPreview = () => axios.get(`${API}/sets/recrop-preview`).then(data);
 export const recropAll = () => axios.post(`${API}/sets/recrop-all`).then(data);
+export const getAiSettings = () => axios.get(`${API}/ai/settings`).then(data);
+export const saveAiSettings = (body) => axios.put(`${API}/ai/settings`, body).then(data);
+export const testAi = () => axios.post(`${API}/ai/test`).then(data);
 export const undoCrop = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/undo-crop`).then(data);
 export const recropSet = (id) => axios.post(`${API}/sets/${id}/recrop`).then(data);
 export const catalogueUrl = (key) => `${API}/catalogues/${key}/download`;

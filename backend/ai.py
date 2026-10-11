@@ -1,8 +1,8 @@
 import re
 import json
 import asyncio
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
-from core import LLM_KEY, logger
+from core import logger
+from llm import ai_settings, resolve, complete
 
 COMMON_RULES = """- Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments are in top-to-bottom order and do not overlap.
 - EXCLUDE page headers, footers, page numbers, "Copyright reserved", "Please turn over / Blaai om", exam centre / candidate boxes.
@@ -99,21 +99,11 @@ def to_int(v):
 
 
 async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
+    cfg = resolve(await ai_settings())
     last_err = None
     for attempt in range(3):
         try:
-            chat = LlmChat(
-                api_key=LLM_KEY,
-                session_id=f"{session_id}-{attempt}",
-                system_message="You are a precise document layout analyser. Output only valid JSON.",
-            ).with_model("gemini", "gemini-3-flash-preview")
-            text = ""
-            async for ev in chat.stream_message(UserMessage(text=prompt, file_contents=[ImageContent(image_base64=img_b64)])):
-                if isinstance(ev, TextDelta):
-                    text += ev.content
-                elif isinstance(ev, StreamDone):
-                    break
-            return parse_json(text)
+            return parse_json(await complete(cfg, prompt, img_b64, f"{session_id}-{attempt}"))
         except Exception as e:
             last_err = e
             logger.warning(f"{session_id} attempt {attempt} failed: {e}")
