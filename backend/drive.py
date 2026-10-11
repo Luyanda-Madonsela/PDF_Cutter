@@ -176,7 +176,12 @@ def _retry(req):
         try:
             return req.execute()
         except HttpError as e:
-            if e.resp.status in (403, 429, 500, 502, 503) and attempt < 4:
+            reason = str(getattr(e, "reason", "")) + str(e.content[:300] if e.content else "")
+            if "accessNotConfigured" in reason or "has not been used in project" in reason:
+                raise RuntimeError("The Google Drive API is not enabled in your Google Cloud project. Enable it at "
+                                   "console.cloud.google.com/apis/library/drive.googleapis.com, wait 2 minutes and try again")
+            rate = e.resp.status == 403 and "ateLimit" not in reason
+            if e.resp.status in (403, 429, 500, 502, 503) and not rate and attempt < 4:
                 import time
                 time.sleep(2 ** attempt)
                 continue

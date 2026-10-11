@@ -1,0 +1,24 @@
+{
+  "summary": "Iteration 12: verified drive.callback scope-grant fix. New test file /app/backend/tests/test_iter12.py (4/4 passed): unit-tests the callback via monkeypatched google_auth_oauthlib.flow.Flow.fetch_token (no real Google). Covers (a) scope as space-delimited string containing https://www.googleapis.com/auth/drive -> RedirectResponse 307 to FRONTEND_URL/?drive=connected and db.drive_credentials {_id:'shared'} has drive scope + connected_by=qa.tester@example.com; (b) scope as LIST -> same success; (c) scope='openid' only -> /?drive=scope and NO credential doc written; (d) real public endpoint GET /api/drive/callback?state=unknown&code=x -> 307 /?drive=error. Teardown removes db.drive_credentials{_id:'shared'} so the real user still sees Not connected. Regression: tests/test_iter11.py + tests/test_auth.py = 26/26 passed. Note: tests must run under -n 0 (serial) due to shared motor loop; parallel xdist with multiple event loops conflicts with motor's loop-bound client.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter12.py",
+    "/app/test_reports/pytest/iter12_results.xml",
+    "/app/test_reports/pytest/iter12_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "drive.callback correctly reads granted scopes from flow.oauth2session.token['scope'] (string OR list) rather than flow.credentials.scopes which is None when the Flow was created with scopes=None. SCOPES ⊆ granted check is right.",
+    "On missing scope the state has already been consumed by find_one_and_delete; user must restart the OAuth flow (acceptable one-shot semantics).",
+    "Stored credential 'scopes' now reflects what Google actually granted (incremental auth-safe)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12.py (new)"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only run)"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut",
+  "seed_data_creation": "Each unit test inserts a TEST_state_* doc into db.drive_states (consumed by callback via find_one_and_delete) and transiently writes db.drive_credentials{_id:'shared'}; autouse fixture deletes drive_credentials after every test. Verified post-run: db.drive_credentials is empty, no TEST_ drive_states remain.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter12.py uses a single module-level asyncio event loop so motor's loop-bound AsyncIOMotorClient works across tests. Run with -n 0 (serial) when invoking only this file; the module-level pytest.ini -n 2 --dist loadscope still works because the whole file pins to one worker. Full Google OAuth cannot be automated end-to-end; the monkeypatch pattern (Flow.fetch_token + Flow.credentials property) is the correct unit-test surface.",
+  "rca of the issue": "Pre-fix: _flow(None) built Flow with scopes=None, so after fetch_token flow.credentials.scopes was None (derived from session.scope but not populated in all paths). The check `set(SCOPES).issubset(flow.credentials.scopes or [])` was always False -> /?drive=scope. Fix reads the raw OAuth token response flow.oauth2session.token['scope'] (which Google always returns per RFC 6749 §5.1 either as space-delimited string or list) and uses that for both the subset check and the persisted scopes column. Verified via monkeypatched Flow in all three branches (string-with-drive -> connected, list-with-drive -> connected, string-without-drive -> scope error)."
+}

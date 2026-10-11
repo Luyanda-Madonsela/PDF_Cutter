@@ -25,6 +25,7 @@ async def service_or_400():
     return svc
 
 
+
 async def imported_ids(ids: List[str]) -> set:
     docs = await db.jobs.find({"is_deleted": False, "drive_source.file_id": {"$in": ids}}, {"drive_source.file_id": 1}).to_list(len(ids) + 1)
     return {d["drive_source"]["file_id"] for d in docs}
@@ -52,7 +53,10 @@ async def search(q: str = Query(""), page_token: Optional[str] = Query(None), si
     svc = await service_or_400()
     terms = [t for t in re.split(r"\s+", q.strip()) if t]
     query = PDF_Q + "".join(f" and name contains '{t.replace(chr(92), '').replace(chr(39), chr(92) + chr(39))}'" for t in terms)
-    res = await asyncio.to_thread(_list, svc, query, page_token, size)
+    try:
+        res = await asyncio.to_thread(_list, svc, query, page_token, size)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
     files = res.get("files", [])
     parents = await asyncio.to_thread(_names, svc, list({f["parents"][0] for f in files if f.get("parents")}))
     done = await imported_ids([f["id"] for f in files])

@@ -98,3 +98,4 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - Fixed Drive connect: "invalid_grant Missing code verifier" (PKCE). The connect step now stores flow.code_verifier in drive_states, and the callback restores it
 - Cost tracker: db.ai_usage counts per day/provider/model (calls = pages read, tokens in/out); GET /api/ai/usage; editable prices (db.ai_prices, USD per 1M tokens, defaults in llm.DEFAULT_PRICES); "Usage & cost" tab in the AI dialog. Tracking starts 11 Oct 2026
 - Tests: iteration_11 100%
+- Iteration 12: fixed the Drive scope check (granted scopes now read from oauth2session.token['scope'])
