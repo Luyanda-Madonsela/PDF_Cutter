@@ -208,6 +208,7 @@ class DriveWriter:
 
     def folder(self, path: List[str], create_root: bool = False) -> str:
         parent, walked = "root", []
+        inside_root = path[:len(self.root)] == self.root  # only the configured root must already exist
         for i, name in enumerate(path):
             walked.append(name)
             key = "/".join(walked)
@@ -222,7 +223,7 @@ class DriveWriter:
             if key not in self.cache:
                 fid = self._find(parent, name, True)
                 if not fid:
-                    if i < len(self.root) and not create_root:
+                    if inside_root and i < len(self.root) and not create_root:
                         raise RuntimeError(f"Drive folder not found: My Drive/{key}")
                     fid = _retry(self.svc.files().create(body={"name": name, "mimeType": FOLDER, "parents": [parent]},
                                                          fields="id", supportsAllDrives=True))["id"]

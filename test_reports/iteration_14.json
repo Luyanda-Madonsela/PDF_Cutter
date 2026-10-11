@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 15 testing: Stop/Retry lifecycle on cloned set, Cambridge/IB/NBT catalogues & intl locate, canon_meta + set_base_name for Cambridge, drive.plan_uploads & catalogue_folder, GET /api/drive/skeleton/options, and the ONE real NBT-AQL 2024 skeleton build. 7/8 new tests passed. 1 FAILURE: POST /api/drive/skeleton for NBT-AQL 2024-2024 ends in status='error' with message 'Drive folder not found: My Drive/id:<root>/NBT Past Papers' because DriveWriter.folder() is initialised with the full configured root (['id:<root>', 'CAPS & IEB Past Papers'], len=2) but skeleton paths target parent_of(root) (['id:<root>']) so index 1 'NBT Past Papers' is i<len(self.root) and refuses to auto-create (create_root=False). Regression on test_iter14.py (10/10) and test_auth.py (7/7) all green. Frontend: Drive settings dialog shows drive-skeleton-panel, 0580 x 2024-2024 reads 'Create 180 folders' as expected. MetaEditor dialog exposes meta-input-curriculum/qualification/variant/school/assessment/term. CataloguesPanel shows grade tabs for IGCSE, AS & A Level, IB Diploma, NBT, O Level, Lower Secondary Checkpoint and grade 12. doc-stop/doc-retry components verified by code review in DocumentsPanel.jsx (STOPPABLE statuses -> doc-stop-{id}, error|stopped -> doc-retry-{id}). Note: GET /api/drive/skeleton/options returns 27 qualifications (spec says 29); backend QUALS dict defines 17 Cambridge + 8 IB + 2 NBT = 27, which matches the 27 intl workbooks shipped in catalogues_src. If 29 is correct, two intl qualifications are missing from intl.py QUALS and from catalogues_src.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/drive/skeleton", "issue": "Skeleton build fails for any qualification not already present under the configured root. DriveWriter is instantiated with the full root in run_skeleton() but paths target parent_of(root); DriveWriter.folder() refuses to create folders when i<len(self.root) unless create_root=True. Fix: pass create_root=True to w.folder(p) inside run_skeleton, or instantiate DriveWriter with parent_of(root) as its root.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/drive/skeleton/options", "issue": "Returns 27 qualifications, spec mentions 29. If 29 is intended, intl.QUALS and catalogues_src/ are missing 2 entries (candidates: 0607 IGCSE International Maths, additional IB course). Validate the expected list."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15.py",
+    "/app/test_reports/pytest/iter15_results.xml",
+    "/app/test_reports/pytest/iter15_regression.xml"
+  ],
+  "action_items": [
+    "Fix run_skeleton: either pass create_root=True to DriveWriter.folder() for each path, or construct DriveWriter(svc, parent_of(root)) so NBT/Cambridge/IB sibling folders can be created automatically. The test_skeleton_build_small_nbt_run test will pass after that fix.",
+    "Confirm whether QUALS should expose 29 qualifications (spec says 29, implementation ships 27). If so, add the missing two syllabi + their catalogue workbooks."
+  ],
+  "critical_code_review_comments": [
+    "jobs.process_job properly resets pages_done to 0 and sets status 'stopped' with 'Stopped by you...' on asyncio.CancelledError (correct per spec).",
+    "routes.stop_document correctly uses stop_job() for RUNNING cancellation but also handles the queue-only case by calling set_fields with pages_done=0 and the Stopped error message. Good edge handling.",
+    "retry_job resets questions=[] and pages_done=0, so no half-done artefacts carry over - matches 'nothing half-done kept' requirement.",
+    "intl.paper_path and catalogue_folder cleanly segregate cambridge/ib/nbt layouts; the 'Varient_' misspelling is deliberate to match the user's existing Drive tree.",
+    "drive.run_skeleton: DriveWriter(svc, root).folder(p) will refuse to create folders inside i<len(self.root). This is the exact bug surfaced by the test. Preferred fix: `await asyncio.to_thread(w.folder, p, True)` since skeleton explicitly means 'create them'.",
+    "catalogue._locate_intl correctly respects grey years and Feb/Mar variant 1/3 greyed rows; verified via 0580 Feb/Mar 2024 V1 returning found=False.",
+    "/api/drive/skeleton POST does not debounce concurrent requests for different qualifications beyond the 'skeleton' task key, which is good (409 while running)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter15.py (new)"],
+  "success_rate": {"backend": "87.5% (7/8 new; 10/10 iter14 regression; 7/7 auth)", "frontend": "100% (skeleton panel, meta editor, catalogues panel verified)"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut (cookie session_token)",
+  "seed_data_creation": "test_stop_and_retry_lifecycle clones the IEB set via tests/clone_set.py, mutates the clone's QP job, then soft-deletes (is_deleted=True) the clone and all its jobs in the finally block. test_skeleton_build_small_nbt_run issues one small real POST /api/drive/skeleton for ['NBT-AQL'] 2024-2024 (5 folders) as explicitly allowed by the review request - but ended in error state (bug above), so no real folders were created in the user's Drive.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After the skeleton create_root fix, re-run tests/test_iter15.py::test_skeleton_build_small_nbt_run. Note: drive_skeleton settings doc now shows status='error' from the failed run; the next successful run will overwrite it. clone_set.py prints new set UUID on the last line of stdout. test_iter13.py in the repo has a pre-existing bug: it reads REACT_APP_BACKEND_URL at import time without load_dotenv - skipped in regression here.",
+  "rca of the issue": "RCA (skeleton failure): drive.run_skeleton builds Drive paths beginning at parent_of(root) in order to create sibling top-level folders like 'NBT Past Papers' alongside 'CAPS & IEB Past Papers'. However it constructs DriveWriter(svc, await root_path()), which stores the full configured root (['id:<rid>', 'CAPS & IEB Past Papers']). Inside DriveWriter.folder() the guard `if i < len(self.root) and not create_root: raise` fires on index 1 of the new path (any non-existing sibling folder of the configured root), hence the 'Drive folder not found: My Drive/id:<rid>/NBT Past Papers' error. Reproduction: POST /api/drive/skeleton {qualifications:['NBT-AQL'], year_from:2024, year_to:2024} with root_path='CAPS & IEB Past Papers' and no pre-existing 'NBT Past Papers' sibling -> GET /api/drive/skeleton/options.status returns {status:'error', error:'Drive folder not found: My Drive/id:<rid>/NBT Past Papers'}. Mitigation: in run_skeleton, change `await asyncio.to_thread(w.folder, p)` to `await asyncio.to_thread(w.folder, p, True)` so top-level sibling folders are auto-created."
+}
