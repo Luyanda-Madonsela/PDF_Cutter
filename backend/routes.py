@@ -70,7 +70,7 @@ async def root():
 @api.post("/sets")
 async def create_set(question_paper: UploadFile = File(...), memo: UploadFile = File(...),
                      addenda: List[UploadFile] = File(default=[]), errata: List[UploadFile] = File(default=[])):
-    files = [(question_paper, "question_paper"), (memo, "memo")] + [(f, "addendum") for f in addenda] + [(f, "errata") for f in errata]
+    files = [(question_paper, "question_paper"), (memo, "memo")] + [(f, "addendum") for f in addenda if f.filename] + [(f, "errata") for f in errata if f.filename]
     payload = [(f.filename, await read_pdf(f), t) for f, t in files]
     s = PaperSet(mode="single", status="processing")
     await db.sets.insert_one(s.to_mongo())

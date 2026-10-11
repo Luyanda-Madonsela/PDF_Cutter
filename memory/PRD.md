@@ -30,6 +30,15 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - Filename: 001_Mathematics_Gr12_2024_Nov_National_P1_Q1.1_7marks.png
 - Prompt now makes the AI list every sub-question first, so none are merged or skipped (3 of 3 runs perfect)
 
+## Iteration 4 (2026-06)
+- Paper sets: a question paper must come with its memo; optional addenda and errata. Two upload modes in the header menu: One paper (4 slots, QP + memo required) or Bulk (the AI reads each cover and groups files into sets; papers with no memo wait as "Needs memo" and are not split until one is added)
+- Two-stage worker: sort covers first, then split; it picks up where it left off after a restart
+- Crops erase the sub-question's own number, QUESTION headings and totals using magic erase (fill with the surrounding median colour); the AI flags questions it can't clean safely; "Marks not found" and "No matching memo answer" flags; Mark reviewed
+- Images are tight to a shared content column and scaled to exactly 1400px wide
+- Errata items are labelled by the question they fix, and addendum figures are linked to their question(s) (a main-question item links to all its sub-questions); the ZIP puts _MEMO/_ADDENDUM/_ERRATA files beside each question, plus addendum_general/, unlinked/, memo_unmatched/
+- Storage: PDFs, page previews and crops are all in Emergent Object Storage (already in place since the MVP)
+- 23 backend tests passing (iteration_4)
+
 ## Backlog
 - P1: Combined ZIP download for many papers (e.g. by subject/year)
 - P1: Split a single image into two

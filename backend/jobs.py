@@ -239,7 +239,11 @@ async def classify_job(job_id: str):
         n = doc.page_count
         b64 = base64.b64encode(page_jpeg(doc, 0)).decode()
         doc.close()
-        raw = await detect_meta(b64, f"{job_id}-meta")
+        existing = await load_set(job.set_id) if job.set_id else None
+        if job.forced_type and job.forced_type != "question_paper" and existing and existing.meta.subject:
+            raw = existing.meta.model_dump()  # attaching to a known set: no need to re-read the cover
+        else:
+            raw = await detect_meta(b64, f"{job_id}-meta")
         meta = canon_meta(JobMeta(**{k: v for k, v in raw.items() if k in JobMeta.model_fields}))
         if meta.doc_type not in DOC_SUFFIX and meta.doc_type != "question_paper":
             meta.doc_type = "question_paper"
