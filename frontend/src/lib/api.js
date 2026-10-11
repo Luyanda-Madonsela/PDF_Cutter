@@ -36,3 +36,8 @@ export const pageUrl = (jobId, page) => `${API}/jobs/${jobId}/pages/${page}`;
 
 export const DOC_LABEL = { question_paper: "Question paper", memo: "Memo", addendum: "Addendum", errata: "Errata" };
 export const ACTIVE_DOC = ["queued", "classifying", "waiting", "ready", "processing"];
+export const listCatalogues = () => axios.get(`${API}/catalogues`).then(data);
+export const catalogueUrl = (key) => `${API}/catalogues/${key}/download`;
+export const getErase = (id, qid) => axios.get(`${API}/jobs/${id}/questions/${qid}/erase`).then(data);
+export const decideErase = (id, qid, boxes) => axios.post(`${API}/jobs/${id}/questions/${qid}/erase`, { boxes }).then(data);
+export const approveAllErases = (setId) => axios.post(`${API}/sets/${setId}/erase-approve-all`).then(data);

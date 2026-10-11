@@ -39,7 +39,7 @@ export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete }) => {
   const [filter, setFilter] = useState("all");
   const shown = sets.filter((s) => matches(s, filter));
   return (
-    <aside data-testid={PC.historySection} className="pc-card p-5 pc-rise lg:sticky lg:top-24">
+    <aside data-testid={PC.historySection} className="pc-card p-5 pc-rise">
       <div className="pc-overline mb-3">Paper sets</div>
       <div data-testid={PC.queueCounts} className="grid grid-cols-5 gap-1 mb-4 font-mono text-center">
         {TILES.map(([k, l]) => (

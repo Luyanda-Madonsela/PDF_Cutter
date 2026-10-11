@@ -6,9 +6,11 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 import pymupdf
 from core import db, put_object, get_object, APP_NAME
-from models import Job, JobMeta, PaperSet, QuestionUpdate, DOC_TYPES
+from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TYPES
+from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
-                  rebuild_question, canon_meta, update_set_meta, sum_marks)
+                  rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
+                  erase_proposals, ERASE_FLAG)
 
 api = APIRouter(prefix="/api")
 JOB_EXCLUDE = {"page_paths", "page_masks"}
@@ -58,6 +60,8 @@ async def set_detail(s: PaperSet) -> dict:
     out = s.model_dump()
     out["documents"] = [j.model_dump(exclude=JOB_EXCLUDE) for j in jobs]
     out.update(compute_links(jobs))
+    out["catalogue"] = locate(s.meta)
+    out["erase_pending"] = sum(1 for j in jobs for q in j.questions if q.erase_status == "pending")
     return out
 
 
@@ -160,6 +164,42 @@ async def download_set_zip(set_id: str):
     return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{folder}.zip"'})
 
 
+# ---------- catalogues ----------
+async def catalogue_entries() -> dict:
+    out = {k: [] for k in CATALOGUES}
+    sets = await db.sets.find({"is_deleted": False, "status": "done"}).to_list(20000)
+    sets = [PaperSet.from_mongo(d) for d in sets]
+    sets.sort(key=lambda s: (s.meta.language.lower() == "english", s.created_at))  # English wins a shared row
+    for s in sets:
+        key = catalogue_key(s.meta)
+        if not key or not locate(s.meta).get("found"):
+            continue
+        jobs = await set_jobs(s.id)
+        qp = next((j for j in jobs if j.meta.doc_type == "question_paper" and j.status == "done"), None)
+        if not qp:
+            continue
+        errata = sorted({norm_label(q.label) for j in jobs if j.meta.doc_type == "errata" for q in j.questions if norm_label(q.label)[:1].isdigit()},
+                        key=lambda x: [int(p) for p in x.split(".")])
+        out[key].append({"meta": s.meta, "questions": [{"label": norm_label(q.label), "topic": q.topic} for q in qp.questions], "errata": errata})
+    return out
+
+
+@api.get("/catalogues")
+async def list_catalogues():
+    entries = await catalogue_entries()
+    return [{"key": k, "name": f.replace(".xlsx", ""), "filename": f, "grade": g, "papers_filled": len(entries[k])} for k, (f, g) in CATALOGUES.items()]
+
+
+@api.get("/catalogues/{key}/download")
+async def download_catalogue(key: str):
+    if key not in CATALOGUES:
+        raise HTTPException(404, "Catalogue not found")
+    entries = await catalogue_entries()
+    data = await asyncio.to_thread(build_workbook, key, entries[key])
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{CATALOGUES[key][0]}"'})
+
+
 # ---------- documents ----------
 @api.get("/jobs/{job_id}/images/{qid}")
 async def get_image(job_id: str, qid: str):
@@ -229,6 +269,9 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
         q.flags = [f for f in q.flags if f != "Marks not found"]
     if body.clear_marks:
         q.marks = None
+    if body.topic is not None:
+        q.topic = body.topic or None
+        q.flags = [f for f in q.flags if f != "Topic not set"]
     if body.parts is not None:
         if not body.parts:
             raise HTTPException(400, "At least one crop region required")
@@ -236,9 +279,52 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
             if p.page < 0 or p.page >= job.total_pages or not (0 <= p.y0 < p.y1 <= 1000):
                 raise HTTPException(400, "Invalid crop region")
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
-        job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed)
+        job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed, q.topic,
+                                                    q.erase_applied, q.erase_status)
         doc.close()
     return await edit_and_return(job, job.set_id)
+
+
+@api.get("/jobs/{job_id}/questions/{qid}/erase")
+async def get_erase_proposals(job_id: str, qid: str):
+    job = await job_or_404(job_id)
+    q = job.questions[find_idx(job, qid)]
+    return {"status": q.erase_status, "proposals": erase_proposals(job, q.parts), "applied": q.erase_applied}
+
+
+async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]]):
+    q = job.questions[idx]
+    allowed = erase_proposals(job, q.parts)
+    chosen = [b for b in boxes if b in allowed]
+    flags = [f for f in q.flags if f != ERASE_FLAG]
+    job.questions[idx] = await rebuild_question(job, doc, q.label, q.parts, q.marks, flags, q.id, q.reviewed, q.topic,
+                                                chosen, "applied" if chosen else "rejected")
+
+
+@api.post("/jobs/{job_id}/questions/{qid}/erase")
+async def decide_erase(job_id: str, qid: str, body: EraseDecision):
+    job = await job_or_404(job_id)
+    require_done(job)
+    idx = find_idx(job, qid)
+    doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
+    await apply_erase(job, doc, idx, body.boxes)
+    doc.close()
+    return await edit_and_return(job, job.set_id)
+
+
+@api.post("/sets/{set_id}/erase-approve-all")
+async def approve_all_erases(set_id: str):
+    await set_or_404(set_id)
+    for job in await set_jobs(set_id):
+        pending = [i for i, q in enumerate(job.questions) if q.erase_status == "pending"]
+        if job.status != "done" or not pending:
+            continue
+        doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
+        for i in pending:
+            await apply_erase(job, doc, i, erase_proposals(job, job.questions[i].parts))
+        doc.close()
+        await edit_and_return(job, set_id)
+    return await set_detail(await load_set(set_id))
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/review")
@@ -264,7 +350,9 @@ async def merge_next(job_id: str, qid: str):
             parts.append(p.model_copy())
     flags = [f for f in dict.fromkeys(a.flags + b.flags)]
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
-    job.questions[idx] = await rebuild_question(job, doc, a.label, parts, sum_marks([a.marks, b.marks]), flags, a.id)
+    status = "pending" if "pending" in (a.erase_status, b.erase_status) else a.erase_status if a.erase_status != "none" else b.erase_status
+    job.questions[idx] = await rebuild_question(job, doc, a.label, parts, sum_marks([a.marks, b.marks]), flags, a.id, topic=a.topic or b.topic,
+                                                erase_applied=a.erase_applied + b.erase_applied, erase_status=status)
     doc.close()
     del job.questions[idx + 1]
     return await edit_and_return(job, job.set_id)

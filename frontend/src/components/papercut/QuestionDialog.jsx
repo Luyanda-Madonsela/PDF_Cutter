@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
-import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion } from "@/lib/api";
+import { EraseReview } from "./EraseReview";
+import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const ImgBox = ({ src, alt }) => (
@@ -30,15 +31,17 @@ const FlagBox = ({ flags, onReview }) => (
   </div>
 );
 
-export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange }) => {
+export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics }) => {
   const idx = doc ? doc.questions.findIndex((q) => q.id === qid) : -1;
   const q = idx >= 0 ? doc.questions[idx] : null;
   const [label, setLabel] = useState("");
   const [marks, setMarks] = useState("");
+  const [topic, setTopic] = useState("");
   const [tab, setTab] = useState("question");
-  useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); }, [q?.label, q?.marks]);
+  useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); setTopic(q?.topic || ""); }, [q?.label, q?.marks, q?.topic]);
+  const isQp = doc?.meta.doc_type === "question_paper";
   useEffect(() => { setTab("question"); }, [qid]);
-  const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? ""));
+  const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? "") || topic !== (q.topic || ""));
   const flags = link ? link.flags : q && !q.reviewed ? q.flags : [];
 
   const act = async (fn, msg, close) => {
@@ -66,12 +69,18 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange }) => {
                 {link?.memo && <TabsTrigger data-testid={PC.tabPartner} value="memo">Memo</TabsTrigger>}
                 {link?.addenda?.length > 0 && <TabsTrigger data-testid="lightbox-tab-addendum" value="addendum">Addendum ({link.addenda.length})</TabsTrigger>}
                 {link?.errata?.length > 0 && <TabsTrigger data-testid="lightbox-tab-errata" value="errata">Errata ({link.errata.length})</TabsTrigger>}
+                {q.erase_status !== "none" && <TabsTrigger data-testid="lightbox-tab-erase" value="erase">Erase{q.erase_status === "pending" ? " (needs approval)" : ""}</TabsTrigger>}
                 <TabsTrigger data-testid={PC.tabAdjust} value="adjust">Adjust crop</TabsTrigger>
               </TabsList>
               <TabsContent value="question"><ImgBox src={imageUrl(doc.id, q.id) + v} alt={q.label} /></TabsContent>
               {link?.memo && <TabsContent value="memo"><ImgBox src={imageUrl(link.memo.job_id, link.memo.qid)} alt="memo" /></TabsContent>}
               {link?.addenda?.length > 0 && <TabsContent value="addendum"><RefList refs={link.addenda} /></TabsContent>}
               {link?.errata?.length > 0 && <TabsContent value="errata"><RefList refs={link.errata} /></TabsContent>}
+              {q.erase_status !== "none" && (
+                <TabsContent value="erase">
+                  <EraseReview doc={doc} q={q} onDecide={(boxes) => act(() => decideErase(doc.id, q.id, boxes), boxes.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
+                </TabsContent>
+              )}
               <TabsContent value="adjust">
                 <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
                   onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))} />
@@ -82,8 +91,15 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange }) => {
                 className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
               <input data-testid="question-marks-input" type="number" min="0" value={marks} placeholder="marks" onChange={(e) => setMarks(e.target.value)}
                 className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
+              {isQp && topics.length > 0 && (
+                <select data-testid="question-topic-select" value={topic} onChange={(e) => setTopic(e.target.value)}
+                  className="max-w-[14rem] px-2 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] text-sm focus:outline-none focus:border-[var(--pc-amber)]">
+                  <option value="">No topic</option>
+                  {topics.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              )}
               <button data-testid={PC.labelSave} disabled={!label.trim() || !dirty}
-                onClick={() => act(() => updateQuestion(doc.id, q.id, marks === "" ? { label, clear_marks: true } : { label, marks: Number(marks) }), "Question updated")}
+                onClick={() => act(() => updateQuestion(doc.id, q.id, { label, topic, ...(marks === "" ? { clear_marks: true } : { marks: Number(marks) }) }), "Question updated")}
                 className="pc-btn-secondary text-sm disabled:opacity-40">Save</button>
               <div className="flex-1" />
               {idx < doc.questions.length - 1 && (

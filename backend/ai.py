@@ -120,8 +120,15 @@ async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
     raise RuntimeError(f"AI failed ({session_id}): {last_err}")
 
 
-async def detect_segments(img_b64: str, session_id: str, doc_type: str):
-    data = await ask_json(PROMPTS.get(doc_type, QP_PROMPT), img_b64, session_id)
+TOPIC_RULE = """
+- "topic": add this field to every segment: the curriculum topic of that sub-question, EXACTLY one of: {topics}. Pick the closest match."""
+
+
+async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=None):
+    prompt = PROMPTS.get(doc_type, QP_PROMPT)
+    if topics:
+        prompt += TOPIC_RULE.format(topics=json.dumps(topics))
+    data = await ask_json(prompt, img_b64, session_id)
     out = []
     for s in data.get("segments", []):
         y0 = max(0, min(1000, int(s["y_start"])))
@@ -129,7 +136,8 @@ async def detect_segments(img_b64: str, session_id: str, doc_type: str):
         if y1 - y0 > 5:
             review = s.get("review")
             out.append({"label": str(s.get("label", "CONTINUED")).strip(), "y0": y0, "y1": y1,
-                        "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None})
+                        "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None,
+                        "topic": str(s["topic"]).strip() if s.get("topic") else None})
     excl = [[max(0, min(1000, int(v))) for v in b] for b in data.get("exclude", []) if isinstance(b, list) and len(b) == 4]
     return sorted(out, key=lambda s: s["y0"]), excl
 

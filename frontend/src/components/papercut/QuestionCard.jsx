@@ -1,4 +1,4 @@
-import { Layers, BookCheck, Flag, Paperclip, FileWarning } from "lucide-react";
+import { Layers, BookCheck, Flag, Paperclip, FileWarning, Eraser } from "lucide-react";
 import { imageUrl } from "@/lib/api";
 
 export const QuestionCard = ({ jobId, q, onOpen, index, link }) => (
@@ -12,13 +12,15 @@ export const QuestionCard = ({ jobId, q, onOpen, index, link }) => (
       <img data-testid={`question-image-${q.order}`} src={imageUrl(jobId, q.id) + `?v=${q.storage_path.slice(-12)}`} alt={`Question ${q.label}`} loading="lazy"
         className="w-full block group-hover:scale-[1.02] transition-transform duration-300" />
     </div>
-    <div className="p-3 flex items-center justify-between gap-2 border-t border-[var(--pc-border)]">
+    {q.topic && <div data-testid={`question-topic-${q.order}`} className="px-3 pt-2 text-[11px] font-mono text-sky-300 truncate border-t border-[var(--pc-border)]">{q.topic}</div>}
+    <div className={`p-3 flex items-center justify-between gap-2 ${q.topic ? "" : "border-t border-[var(--pc-border)]"}`}>
       <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap">
         <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
         {q.marks != null && <span data-testid={`question-marks-${q.order}`} className="font-mono text-[11px] text-[var(--pc-text2)]">{q.marks}m</span>}
       </span>
       <span className="font-mono text-[11px] text-[var(--pc-muted)] flex items-center gap-1.5">
         {link?.flags?.length > 0 && <Flag data-testid={`question-flag-${q.order}`} className="h-3.5 w-3.5 text-[var(--pc-amber)]" />}
+        {q.erase_status === "pending" && <Eraser data-testid={`question-erase-pending-${q.order}`} className="h-3.5 w-3.5 text-red-400" />}
         {link?.memo && <BookCheck data-testid={`question-has-memo-${q.order}`} className="h-3.5 w-3.5 text-[var(--pc-emerald)]" />}
         {link?.addenda?.length > 0 && <Paperclip data-testid={`question-has-addendum-${q.order}`} className="h-3.5 w-3.5 text-sky-400" />}
         {link?.errata?.length > 0 && <FileWarning data-testid={`question-has-errata-${q.order}`} className="h-3.5 w-3.5 text-red-400" />}

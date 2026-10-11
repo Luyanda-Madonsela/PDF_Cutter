@@ -8,6 +8,7 @@ import pymupdf
 from core import db, logger, put_object, get_object, APP_NAME
 from models import Job, JobMeta, Question, Part, PaperSet, DocSummary
 from ai import detect_segments, detect_meta
+from catalogue import locate
 from imaging import page_jpeg, crop_parts, finalize, x_bounds, union_col, to_png
 
 CONCURRENCY = 6
@@ -274,12 +275,13 @@ def merge_groups(page_segs: list) -> list:
             if is_cont and groups:
                 g = groups[-1]
             elif not is_cont:
-                g = {"label": label, "parts": [], "marks": [], "flags": []}
+                g = {"label": label, "parts": [], "marks": [], "flags": [], "topic": None}
                 groups.append(g)
             else:
                 continue
             g["parts"].append(part)
             g["marks"].append(s.get("marks"))
+            g["topic"] = g["topic"] or s.get("topic")
             if s.get("review"):
                 g["flags"].append(s["review"])
     return groups
@@ -290,19 +292,47 @@ def sum_marks(values):
     return sum(vals) if vals else None
 
 
-async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None) -> Question:
+def match_topic(topic, topics):
+    if not topic or not topics:
+        return None
+    return next((t for t in topics if t.lower() == topic.lower()), None) or next((t for t in topics if topic.lower() in t.lower() or t.lower() in topic.lower()), None)
+
+
+async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None, topic=None) -> Question:
     path = await put_object(f"{APP_NAME}/jobs/{job_id}/{uuid.uuid4()}.png", to_png(img), "image/png")
-    return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts, marks=marks, flags=flags,
+    return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts, marks=marks, flags=flags, topic=topic,
                     pages=sorted({p.page + 1 for p in parts}), width=img.width, height=img.height)
 
 
-async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False) -> Question:
-    crops = await asyncio.to_thread(crop_parts, doc, parts, {}, job.page_masks)
+ERASE_FLAG = "Erase pending approval"
+
+
+def erase_proposals(job: Job, parts) -> List[List[int]]:
+    """AI-suggested erase boxes that fall inside the question's crop regions."""
+    out = []
+    for p in parts:
+        boxes = job.page_masks[p.page] if p.page < len(job.page_masks) else []
+        out += [[p.page, *b] for b in boxes if b[2] > p.y0 and b[0] < p.y1 and [p.page, *b] not in out]
+    return out
+
+
+def masks_from(applied: List[List[int]], n_pages: int) -> list:
+    masks = [[] for _ in range(n_pages)]
+    for page, *box in applied:
+        if page < n_pages:
+            masks[page].append(box)
+    return masks
+
+
+async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False, topic=None,
+                           erase_applied=None, erase_status: str = "none") -> Question:
+    applied = erase_applied or []
+    crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count))
     col = job.content_col or None
     for c in crops:
         col = union_col(col, x_bounds(c))
-    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid)
-    q.reviewed = reviewed
+    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic)
+    q.reviewed, q.erase_applied, q.erase_status = reviewed, applied, erase_status
     return q
 
 
@@ -319,13 +349,14 @@ async def process_job(job_id: str):
         b64s = [base64.b64encode(j).decode() for j in jpgs]
         page_paths = await asyncio.gather(*[put_object(f"{APP_NAME}/jobs/{job_id}/page_{i}.jpg", j, "image/jpeg") for i, j in enumerate(jpgs)])
         doc_type = job.meta.doc_type
+        topics = locate(s.meta).get("topics", []) if s and doc_type == "question_paper" else []
         page_masks = [[] for _ in range(n)]
         sem = asyncio.Semaphore(CONCURRENCY)
         done = {"n": 0}
 
         async def run(i):
             async with sem:
-                segs, excl = await detect_segments(b64s[i], f"{job_id}-p{i + 1}", doc_type)
+                segs, excl = await detect_segments(b64s[i], f"{job_id}-p{i + 1}", doc_type, topics)
                 page_masks[i] = excl
                 done["n"] += 1
                 await set_fields(job_id, pages_done=done["n"])
@@ -341,19 +372,26 @@ async def process_job(job_id: str):
         cache, col = {}, None
         for g in groups:
             evict(cache, g["parts"][0].page)
-            for c in await asyncio.to_thread(crop_parts, doc, g["parts"], cache, page_masks):
+            for c in await asyncio.to_thread(crop_parts, doc, g["parts"], cache, []):
                 col = union_col(col, x_bounds(c))
         # pass 2: final images
         cache, questions = {}, []
         for g in groups:
             evict(cache, g["parts"][0].page)
-            crops = await asyncio.to_thread(crop_parts, doc, g["parts"], cache, page_masks)
+            crops = await asyncio.to_thread(crop_parts, doc, g["parts"], cache, [])  # no erasing without human approval
             marks = sum_marks(g["marks"])
             flags = list(dict.fromkeys(g["flags"]))
             if doc_type == "question_paper" and marks is None:
                 flags.append("Marks not found")
+            topic = match_topic(g["topic"], topics)
+            if topics and not topic:
+                flags.append("Topic not set")
             img = await asyncio.to_thread(finalize, crops, col)
-            questions.append(await upload_question(job_id, img, g["label"], g["parts"], marks, flags))
+            q = await upload_question(job_id, img, g["label"], g["parts"], marks, flags, topic=topic)
+            if erase_proposals(Job(filename="", page_masks=page_masks), g["parts"]):
+                q.erase_status = "pending"
+                q.flags.append(ERASE_FLAG)
+            questions.append(q)
         doc.close()
 
         job = await load_job(job_id)

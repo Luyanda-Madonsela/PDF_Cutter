@@ -5,12 +5,22 @@ import { QuestionDialog } from "./QuestionDialog";
 import { MetaEditor } from "./MetaEditor";
 import { DocumentsPanel } from "./DocumentsPanel";
 import { SET_STATUS } from "./QueuePanel";
-import { setZipUrl, DOC_LABEL } from "@/lib/api";
+import { setZipUrl, DOC_LABEL, approveAllErases } from "@/lib/api";
+import { toast } from "sonner";
 import { PC } from "@/constants/testIds";
 
 const MetaChips = ({ meta }) => {
   const chips = [meta.subject, meta.grade && `Grade ${meta.grade}`, meta.year, meta.session, meta.province, meta.paper && `Paper ${meta.paper}`, meta.language].filter(Boolean);
   return chips.map((c) => <span key={c} className="px-2 py-0.5 rounded bg-[var(--pc-surface2)] font-mono text-[11px] text-[var(--pc-text2)]">{c}</span>);
+};
+
+const CatalogueLine = ({ cat }) => {
+  if (!cat) return null;
+  return (
+    <p data-testid="set-catalogue-location" className={`mt-3 text-xs font-mono ${cat.found ? "text-[var(--pc-emerald)]" : "text-[var(--pc-amber)]"}`}>
+      {cat.found ? `Catalogue: ${cat.workbook.replace(".xlsx", "")} › ${cat.sheet} › ${cat.block?.split(" - ")[1] || ""} › ${cat.row_label}` : `Catalogue: ${cat.reason}`}
+    </p>
+  );
 };
 
 const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
@@ -25,9 +35,19 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
             <MetaChips meta={set.meta} />
             <MetaEditor set={set} onSetChange={onSetChange} />
           </div>
+          <CatalogueLine cat={set.catalogue} />
         </div>
         <div className="flex gap-3 flex-wrap shrink-0">
           <button data-testid={PC.newPdfButton} onClick={onReset} className="pc-btn-secondary"><Plus className="h-4 w-4" /> Upload more</button>
+          {set.erase_pending > 0 && (
+            <button data-testid="approve-all-erases-button" className="pc-btn-secondary !border-red-400/60"
+              onClick={async () => {
+                if (!window.confirm(`Approve every AI-suggested erase in this set (${set.erase_pending} images)? Check a few first in each image's Erase tab.`)) return;
+                try { onSetChange(await approveAllErases(set.id)); toast.success("Erases applied"); } catch { toast.error("Could not apply erases"); }
+              }}>
+              Approve all erases ({set.erase_pending})
+            </button>
+          )}
           {set.qp_id && <a data-testid={PC.downloadZip} href={setZipUrl(set.id)} className="pc-btn-primary"><Download className="h-4 w-4" /> Download ZIP</a>}
         </div>
       </div>
@@ -74,7 +94,7 @@ export const SetView = ({ set, onReset, onSetChange, docHandlers }) => {
           ))}
         </div>
       ))}
-      <QuestionDialog doc={openDoc} qid={open?.qid} link={openDoc?.meta.doc_type === "question_paper" ? set.links[open?.qid] : null}
+      <QuestionDialog topics={set.catalogue?.topics || []} doc={openDoc} qid={open?.qid} link={openDoc?.meta.doc_type === "question_paper" ? set.links[open?.qid] : null}
         onClose={() => setOpen(null)} onSetChange={onSetChange} />
     </section>
   );

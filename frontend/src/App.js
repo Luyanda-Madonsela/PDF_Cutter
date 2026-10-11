@@ -6,6 +6,7 @@ import { UploadPanel } from "@/components/papercut/UploadPanel";
 import { SingleUpload } from "@/components/papercut/SingleUpload";
 import { SetView } from "@/components/papercut/SetView";
 import { QueuePanel } from "@/components/papercut/QueuePanel";
+import { CataloguesPanel } from "@/components/papercut/CataloguesPanel";
 import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, ACTIVE_DOC } from "@/lib/api";
 
 const UPLOAD_CONCURRENCY = 3;
@@ -86,8 +87,9 @@ function App() {
           {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
           {set && <SetView set={set} onReset={() => setSet(null)} onSetChange={onSetChange} docHandlers={docHandlers} />}
         </div>
-        <div className="lg:col-span-3">
+        <div className="lg:col-span-3 space-y-6">
           <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} />
+          <CataloguesPanel refreshKey={`${counts.done || 0}-${set?.status}`} />
         </div>
       </main>
     </div>

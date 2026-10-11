@@ -38,6 +38,9 @@ class Question(BaseModel):
     parts: List[Part] = []
     pages: List[int] = []
     marks: Optional[int] = None
+    topic: Optional[str] = None
+    erase_status: str = "none"  # none | pending | applied | rejected
+    erase_applied: List[List[int]] = []  # approved boxes: [page, ymin, xmin, ymax, xmax]
     flags: List[str] = []
     reviewed: bool = False
     width: int = 0
@@ -96,8 +99,13 @@ class PaperSet(BaseDocument):
     created_at: str = Field(default_factory=now_iso)
 
 
+class EraseDecision(BaseModel):
+    boxes: List[List[int]] = []  # approved subset of proposals; empty = keep original
+
+
 class QuestionUpdate(BaseModel):
     label: Optional[str] = None
     parts: Optional[List[Part]] = None
     marks: Optional[int] = None
     clear_marks: bool = False
+    topic: Optional[str] = None
