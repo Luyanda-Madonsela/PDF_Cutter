@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime, timezone, timedelta
 import io
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,12 +46,14 @@ async def complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> str
     if cfg["provider"] in NATIVE or cfg["provider"] == "emergent":
         vendor = "gemini" if cfg["provider"] == "emergent" else cfg["provider"]
         chat = LlmChat(api_key=cfg["key"], session_id=session_id, system_message=SYSTEM).with_model(vendor, cfg["model"])
-        text = ""
+        text, usage = "", None
         async for ev in chat.stream_message(UserMessage(text=prompt, file_contents=[ImageContent(image_base64=img_b64)])):
             if isinstance(ev, TextDelta):
                 text += ev.content
             elif isinstance(ev, StreamDone):
+                usage = ev.usage
                 break
+        await record_usage(cfg, usage.input_tokens if usage else 0, usage.output_tokens if usage else 0)
         return text
     if not cfg["model"]:
         raise RuntimeError("No model name set for this provider")
@@ -59,7 +62,15 @@ async def complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> str
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": [{"type": "text", "text": prompt},
                                      {"type": "image_url", "image_url": {"url": f"data:{_mime(img_b64)};base64,{img_b64}"}}]}])
+    u = resp.usage
+    await record_usage(cfg, u.prompt_tokens if u else 0, u.completion_tokens if u else 0)
     return resp.choices[0].message.content or ""
+
+
+async def record_usage(cfg: dict, tin: int, tout: int):
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    await db.ai_usage.update_one({"day": day, "provider": cfg["provider"], "model": cfg["model"]},
+                                 {"$inc": {"calls": 1, "input_tokens": int(tin or 0), "output_tokens": int(tout or 0)}}, upsert=True)
 
 
 def _mask(k: Optional[str]) -> Optional[str]:
@@ -123,3 +134,51 @@ async def test_connection():
     except Exception as e:
         raise HTTPException(400, f"{PROVIDERS[cfg['provider']]['label']} ({cfg['model']}) failed: {str(e)[:300]}")
     return {"ok": True, "provider": cfg["provider"], "model": cfg["model"], "fallback": cfg["fallback"], "reply": text[:300]}
+
+
+# USD per 1M tokens (input, output). Rough list prices, edit in the app if they change.
+DEFAULT_PRICES = {"gemini-3-flash-preview": [0.50, 3.00], "gemini-3.1-pro-preview": [2.00, 12.00], "gemini-2.5-flash": [0.30, 2.50],
+                  "gemini-2.5-pro": [1.25, 10.00], "claude-sonnet-4-6": [3.00, 15.00], "claude-haiku-4-5-20251001": [1.00, 5.00],
+                  "gpt-5.4-mini": [0.25, 2.00], "gpt-4.1": [2.00, 8.00], "gpt-4o-mini": [0.15, 0.60]}
+
+
+async def prices() -> dict:
+    custom = {d["_id"]: d["price"] for d in await db.ai_prices.find().to_list(500)}
+    return {**DEFAULT_PRICES, **custom}
+
+
+@ai_api.get("/usage")
+async def usage(days: int = 30):
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)) - 1)).strftime("%Y-%m-%d")
+    rows = await db.ai_usage.find({"day": {"$gte": since}}, {"_id": 0}).to_list(10000)
+    table = await prices()
+    by_model, by_day = {}, {}
+    for r in rows:
+        k = (r["provider"], r["model"])
+        m = by_model.setdefault(k, {"provider": r["provider"], "model": r["model"], "calls": 0, "input_tokens": 0, "output_tokens": 0})
+        for f in ("calls", "input_tokens", "output_tokens"):
+            m[f] += r.get(f, 0)
+        by_day[r["day"]] = by_day.get(r["day"], 0) + r.get("calls", 0)
+    total = 0.0
+    for m in by_model.values():
+        p = table.get(m["model"])
+        m["price"] = p
+        m["cost"] = round(m["input_tokens"] / 1e6 * p[0] + m["output_tokens"] / 1e6 * p[1], 4) if p else None
+        m["paid_by"] = "Emergent credits" if m["provider"] == "emergent" else "your own key"
+        total += m["cost"] or 0
+    return {"days": days, "models": sorted(by_model.values(), key=lambda m: -m["calls"]), "total_cost": round(total, 4),
+            "total_calls": sum(m["calls"] for m in by_model.values()), "daily": [{"day": d, "calls": by_day[d]} for d in sorted(by_day)]}
+
+
+class PriceIn(BaseModel):
+    model: str
+    input: float
+    output: float
+
+
+@ai_api.put("/prices")
+async def set_price(body: PriceIn):
+    if body.input < 0 or body.output < 0 or not body.model.strip():
+        raise HTTPException(400, "Prices must be zero or more")
+    await db.ai_prices.update_one({"_id": body.model.strip()}, {"$set": {"price": [body.input, body.output]}}, upsert=True)
+    return await usage()

@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { getAiSettings, saveAiSettings, testAi } from "@/lib/api";
 import { PC } from "@/constants/testIds";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { AiUsage } from "./AiUsage";
 
 const field = "w-full rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] px-3 py-2 text-sm font-mono focus:outline-none focus:border-[var(--pc-amber)]";
 const KEY_HELP = {
@@ -81,7 +83,14 @@ export const AiBadge = () => {
               Now using {st.providers[a.provider].label}: {a.model}{a.fallback ? ` (no ${st.providers[st.provider].label} key yet, so the Emergent key is used)` : ""}.
             </DialogDescription>
           </DialogHeader>
-          <AiForm st={st} onSaved={setSt} />
+          <Tabs defaultValue="model">
+            <TabsList className="bg-[var(--pc-surface2)]">
+              <TabsTrigger data-testid="ai-tab-model" value="model">Model</TabsTrigger>
+              <TabsTrigger data-testid="ai-tab-usage" value="usage">Usage & cost</TabsTrigger>
+            </TabsList>
+            <TabsContent value="model"><AiForm st={st} onSaved={setSt} /></TabsContent>
+            <TabsContent value="usage"><AiUsage /></TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </>

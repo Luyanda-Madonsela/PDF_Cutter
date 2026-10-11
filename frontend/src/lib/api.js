@@ -56,6 +56,8 @@ export const recropPreview = () => axios.get(`${API}/sets/recrop-preview`).then(
 export const recropAll = () => axios.post(`${API}/sets/recrop-all`).then(data);
 export const getAiSettings = () => axios.get(`${API}/ai/settings`).then(data);
 export const saveAiSettings = (body) => axios.put(`${API}/ai/settings`, body).then(data);
+export const getAiUsage = (days) => axios.get(`${API}/ai/usage`, { params: { days } }).then(data);
+export const setAiPrice = (model, input, output) => axios.put(`${API}/ai/prices`, { model, input, output }).then(data);
 export const testAi = () => axios.post(`${API}/ai/test`).then(data);
 export const undoCrop = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/undo-crop`).then(data);
 export const recropSet = (id) => axios.post(`${API}/sets/${id}/recrop`).then(data);

@@ -77,9 +77,11 @@ def show_root(st: dict) -> str:
 @drive_api.get("/connect")
 async def connect(user: User = Depends(require_user)):
     state = secrets.token_urlsafe(24)
-    await db.drive_states.insert_one({"_id": state, "user_email": user.email, "created_at": datetime.now(timezone.utc)})
-    url, _ = _flow(SCOPES).authorization_url(access_type="offline", include_granted_scopes="true", prompt="select_account consent",
+    flow = _flow(SCOPES)
+    url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="select_account consent",
                                              state=state, login_hint=os.environ["GOOGLE_DRIVE_ACCOUNT"])
+    await db.drive_states.insert_one({"_id": state, "user_email": user.email, "code_verifier": flow.code_verifier,
+                                      "created_at": datetime.now(timezone.utc)})
     return {"authorization_url": url}
 
 
@@ -91,6 +93,7 @@ async def callback(code: Optional[str] = Query(None), state: str = Query(...), e
         return RedirectResponse(f"{front}/?drive=error")
     try:
         flow = _flow(None)
+        flow.code_verifier = st.get("code_verifier")  # PKCE: must match the verifier used for the auth URL
         await asyncio.to_thread(flow.fetch_token, code=code)
         c = flow.credentials
     except Exception as e:
