@@ -10,15 +10,42 @@ from ai import detect_segments, detect_meta
 from imaging import page_jpeg, render_question, to_png
 
 CONCURRENCY = 6
-SESSION_ABBR = {"february": "Feb", "march": "Mar", "may": "May", "june": "Jun", "september": "Sep", "november": "Nov", "exemplar": "Exemplar"}
+SESSIONS = [(("feb", "mar"), "Feb/Mar"), (("may", "jun"), "May/Jun"), (("sep",), "Sep"), (("nov",), "Nov"), (("exem",), "Exemplar")]
+PROVINCES = [("gauteng", "GP"), ("kwazulu", "KZN"), ("kzn", "KZN"), ("western cape", "WC"), ("wced", "WC"), ("eastern cape", "EC"),
+             ("free state", "FS"), ("limpopo", "LP"), ("mpumalanga", "MP"), ("north west", "NW"), ("northern cape", "NC"),
+             ("ieb", "IEB"), ("national", "National"), ("dbe", "National"), ("nsc", "National")]
+PROVINCE_CODES = {"GP", "KZN", "WC", "EC", "FS", "LP", "MP", "NW", "NC", "IEB", "National"}
 
 
 def canon_session(s: str) -> str:
     low = (s or "").strip().lower()
-    for full in SESSION_ABBR:
-        if low and (full.startswith(low[:3]) or low.startswith(full[:3])):
-            return full.capitalize()
+    for keys, val in SESSIONS:
+        if low and any(k in low for k in keys):
+            return val
     return (s or "").strip()
+
+
+def canon_province(s: str) -> str:
+    raw = (s or "").strip()
+    if raw.upper() in PROVINCE_CODES or raw == "National":
+        return "National" if raw.lower() == "national" else raw.upper()
+    low = raw.lower()
+    for key, code in PROVINCES:
+        if key in low:
+            return code
+    return raw
+
+
+def canon_meta(m: JobMeta) -> JobMeta:
+    m.session = canon_session(m.session)
+    m.province = canon_province(m.province)
+    m.grade = re.sub(r"\D", "", m.grade or "")
+    m.paper = re.sub(r"\D", "", m.paper or "")
+    return m
+
+
+def camel(s: str) -> str:
+    return "".join(w[:1].upper() + w[1:] for w in re.split(r"[^A-Za-z0-9]+", s or "") if w)
 
 
 def slug(s: str) -> str:
@@ -37,9 +64,8 @@ def compute_base_name(job: Job) -> str:
     m = job.meta
     if not m.subject:
         return slug(Path(job.filename).stem)
-    bits = [slug(m.subject), f"Gr{m.grade}" if m.grade else "", m.year,
-            SESSION_ABBR.get(m.session.lower(), slug(m.session)), f"P{m.paper}" if m.paper else "",
-            "MEMO" if m.doc_type == "memo" else ""]
+    bits = [camel(m.subject), f"Gr{m.grade}" if m.grade else "", m.year, camel(m.session), camel(m.province),
+            f"P{m.paper}" if m.paper else "", "MEMO" if m.doc_type == "memo" else ""]
     return "_".join(b for b in bits if b)
 
 
@@ -51,7 +77,8 @@ def renumber(job: Job):
         seen[lab] = seen.get(lab, 0) + 1
         suffix = f"_{seen[lab]}" if seen[lab] > 1 else ""
         q.order = i
-        q.filename = f"{job.base_name}_{i:03d}_Q{lab}{suffix}.png"
+        marks = f"_{q.marks}marks" if q.marks is not None else ""
+        q.filename = f"{i:03d}_{job.base_name}_Q{lab}{suffix}{marks}.png"
 
 
 async def load_job(job_id: str):
@@ -74,7 +101,7 @@ async def try_pair(job: Job):
     other_type = "question_paper" if m.doc_type == "memo" else "memo"
     query = {"is_deleted": False, "status": "done", "paired_job_id": None, "_id": {"$ne": job.id},
              "meta.doc_type": other_type}
-    for k in ("subject", "grade", "year", "session", "paper"):
+    for k in ("subject", "grade", "year", "session", "paper", "province"):
         query[f"meta.{k}"] = {"$regex": f"^{re.escape(getattr(m, k))}$", "$options": "i"}
     other = await db.jobs.find_one(query, sort=[("created_at", -1)])
     if other:
@@ -88,11 +115,16 @@ async def unpair(job: Job):
         await set_fields(job.id, paired_job_id=None)
 
 
-async def build_question(job_id: str, doc, label: str, parts, cache: dict, qid: str = None) -> Question:
-    img = await asyncio.to_thread(render_question, doc, parts, cache)
+def sum_marks(values):
+    vals = [v for v in values if v is not None]
+    return sum(vals) if vals else None
+
+
+async def build_question(job_id: str, doc, label: str, parts, cache: dict, masks: list, marks=None, qid: str = None) -> Question:
+    img = await asyncio.to_thread(render_question, doc, parts, cache, masks)
     path = await put_object(f"{APP_NAME}/jobs/{job_id}/{uuid.uuid4()}.png", to_png(img), "image/png")
     return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts,
-                    pages=sorted({p.page + 1 for p in parts}), width=img.width, height=img.height)
+                    pages=sorted({p.page + 1 for p in parts}), width=img.width, height=img.height, marks=marks)
 
 
 def merge_groups(page_segs: list) -> list:
@@ -101,10 +133,12 @@ def merge_groups(page_segs: list) -> list:
         for s in segs:
             label = s["label"]
             is_cont = label.upper() in ("CONTINUED", "CONT", "") or (groups and groups[-1]["label"] == label)
+            part = Part(page=p, y0=s["y0"], y1=s["y1"])
             if is_cont and groups:
-                groups[-1]["parts"].append(Part(page=p, y0=s["y0"], y1=s["y1"]))
+                groups[-1]["parts"].append(part)
+                groups[-1]["marks"].append(s.get("marks"))
             elif not is_cont:
-                groups.append({"label": label, "parts": [Part(page=p, y0=s["y0"], y1=s["y1"])]})
+                groups.append({"label": label, "parts": [part], "marks": [s.get("marks")]})
     return groups
 
 
@@ -122,18 +156,20 @@ async def process_job(job_id: str):
         meta_task = asyncio.create_task(detect_meta(b64s[0], f"{job_id}-meta"))
         page_paths = await asyncio.gather(*[put_object(f"{APP_NAME}/jobs/{job_id}/page_{i}.jpg", j, "image/jpeg") for i, j in enumerate(jpgs)])
         meta = JobMeta(**{k: v for k, v in (await meta_task).items() if k in JobMeta.model_fields})
-        meta.session = canon_session(meta.session)
+        canon_meta(meta)
         if job.forced_memo:
             meta.doc_type = "memo"
         is_memo = meta.doc_type == "memo"
         await set_fields(job_id, meta=meta.model_dump(), page_paths=page_paths)
 
+        page_masks = [[] for _ in range(n)]
         sem = asyncio.Semaphore(CONCURRENCY)
         done = {"n": 0}
 
         async def run(i):
             async with sem:
-                segs = await detect_segments(b64s[i], f"{job_id}-p{i + 1}", is_memo)
+                segs, excl = await detect_segments(b64s[i], f"{job_id}-p{i + 1}", is_memo)
+                page_masks[i] = excl
                 done["n"] += 1
                 await set_fields(job_id, pages_done=done["n"])
                 return segs
@@ -145,11 +181,11 @@ async def process_job(job_id: str):
             first = g["parts"][0].page
             for k in [k for k in cache if k < first]:
                 del cache[k]
-            questions.append(await build_question(job_id, doc, g["label"], g["parts"], cache))
+            questions.append(await build_question(job_id, doc, g["label"], g["parts"], cache, page_masks, sum_marks(g["marks"])))
         doc.close()
 
         job = await load_job(job_id)
-        job.meta, job.page_paths, job.questions = meta, page_paths, questions
+        job.meta, job.page_paths, job.questions, job.page_masks = meta, page_paths, questions, page_masks
         job.status, job.pages_done = "done", n
         renumber(job)
         await save_job(job)

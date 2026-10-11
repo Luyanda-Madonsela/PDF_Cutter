@@ -9,7 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 import pymupdf
 from core import db, put_object, get_object, APP_NAME
 from models import Job, JobMeta, QuestionUpdate
-from jobs import load_job, save_job, renumber, try_pair, unpair, build_question, norm_label, canon_session
+from jobs import load_job, save_job, renumber, try_pair, unpair, build_question, norm_label, canon_meta, sum_marks
 
 api = APIRouter(prefix="/api")
 SUMMARY_EXCLUDE = {"questions": 0, "page_paths": 0}
@@ -98,8 +98,8 @@ async def retry_job(job_id: str):
 async def update_meta(job_id: str, meta: JobMeta):
     job = await job_or_404(job_id)
     require_done(job)
-    keys = ("doc_type", "subject", "grade", "year", "session", "paper")
-    meta.session = canon_session(meta.session)
+    keys = ("doc_type", "subject", "grade", "year", "session", "paper", "province")
+    canon_meta(meta)
     type_changed = any(getattr(job.meta, k) != getattr(meta, k) for k in keys)
     job.meta = meta
     renumber(job)
@@ -144,6 +144,10 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
     q = job.questions[idx]
     if body.label is not None and body.label.strip():
         q.label = body.label.strip()
+    if body.marks is not None:
+        q.marks = body.marks
+    if body.clear_marks:
+        q.marks = None
     if body.parts is not None:
         if not body.parts:
             raise HTTPException(400, "At least one crop region required")
@@ -151,7 +155,7 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
             if p.page < 0 or p.page >= job.total_pages or not (0 <= p.y0 < p.y1 <= 1000):
                 raise HTTPException(400, "Invalid crop region")
         doc = await open_pdf(job)
-        job.questions[idx] = await build_question(job.id, doc, q.label, body.parts, {}, qid=q.id)
+        job.questions[idx] = await build_question(job.id, doc, q.label, body.parts, {}, job.page_masks, q.marks, qid=q.id)
         doc.close()
     renumber(job)
     await save_job(job)
@@ -173,7 +177,7 @@ async def merge_next(job_id: str, qid: str):
             parts[-1].y1 = max(parts[-1].y1, p.y1)
         else:
             parts.append(p.model_copy())
-    job.questions[idx] = await build_question(job.id, doc, a.label, parts, {}, qid=a.id)
+    job.questions[idx] = await build_question(job.id, doc, a.label, parts, {}, job.page_masks, sum_marks([a.marks, b.marks]), qid=a.id)
     doc.close()
     del job.questions[idx + 1]
     renumber(job)

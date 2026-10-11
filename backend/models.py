@@ -32,6 +32,7 @@ class Question(BaseModel):
     storage_path: str
     parts: List[Part] = []
     pages: List[int] = []
+    marks: Optional[int] = None
     width: int = 0
     height: int = 0
 
@@ -42,6 +43,7 @@ class JobMeta(BaseModel):
     year: str = ""
     session: str = ""
     paper: str = ""
+    province: str = ""
     language: str = ""
     doc_type: str = "question_paper"  # question_paper | memo
 
@@ -56,6 +58,7 @@ class Job(BaseDocument):
     error: Optional[str] = None
     questions: List[Question] = []
     page_paths: List[str] = []
+    page_masks: List[List[List[int]]] = []  # per page: [ymin, xmin, ymax, xmax] 0-1000 boxes to white out
     meta: JobMeta = Field(default_factory=JobMeta)
     base_name: str = ""
     paired_job_id: Optional[str] = None
@@ -66,3 +69,5 @@ class Job(BaseDocument):
 class QuestionUpdate(BaseModel):
     label: Optional[str] = None
     parts: Optional[List[Part]] = None
+    marks: Optional[int] = None
+    clear_marks: bool = False

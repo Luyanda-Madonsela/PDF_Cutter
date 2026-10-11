@@ -8,7 +8,7 @@ import { zipUrl } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const MetaChips = ({ meta }) => {
-  const chips = [meta.subject, meta.grade && `Grade ${meta.grade}`, meta.year, meta.session, meta.paper && `Paper ${meta.paper}`, meta.doc_type === "memo" && "Memo"].filter(Boolean);
+  const chips = [meta.subject, meta.grade && `Grade ${meta.grade}`, meta.year, meta.session, meta.province, meta.paper && `Paper ${meta.paper}`, meta.doc_type === "memo" && "Memo"].filter(Boolean);
   return chips.map((c) => <span key={c} className="px-2 py-0.5 rounded bg-[var(--pc-surface2)] font-mono text-[11px] text-[var(--pc-text2)]">{c}</span>);
 };
 

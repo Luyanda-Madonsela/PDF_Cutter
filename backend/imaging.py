@@ -1,7 +1,7 @@
 import io
 from typing import List
 import pymupdf
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw
 
 RENDER_ZOOM = 2.5  # ~180 dpi crops
 AI_ZOOM = 1.4
@@ -34,11 +34,20 @@ def stitch(parts: List[Image.Image]) -> Image.Image:
     return out
 
 
-def render_question(doc, parts, cache: dict) -> Image.Image:
+def apply_masks(img: Image.Image, boxes) -> Image.Image:
+    draw = ImageDraw.Draw(img)
+    for y0, x0, y1, x1 in boxes:
+        draw.rectangle([img.width * (x0 - 4) / 1000, img.height * (y0 - 3) / 1000,
+                        img.width * (x1 + 4) / 1000, img.height * (y1 + 3) / 1000], fill="white")
+    return img
+
+
+def render_question(doc, parts, cache: dict, masks: list) -> Image.Image:
     crops = []
     for part in parts:
         if part.page not in cache:
-            cache[part.page] = render_page(doc, part.page)
+            boxes = masks[part.page] if part.page < len(masks) else []
+            cache[part.page] = apply_masks(render_page(doc, part.page), boxes)
         im = cache[part.page]
         crop = im.crop((0, int(im.height * part.y0 / 1000), im.width, int(im.height * part.y1 / 1000)))
         crops.append(trim_vertical(crop))

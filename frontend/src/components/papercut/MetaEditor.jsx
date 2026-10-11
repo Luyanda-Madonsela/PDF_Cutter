@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { updateMeta } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
-const FIELDS = [["subject", "Subject"], ["grade", "Grade"], ["year", "Year"], ["session", "Session"], ["paper", "Paper no."], ["language", "Language"]];
+const FIELDS = [["subject", "Subject"], ["grade", "Grade"], ["year", "Year"], ["session", "Time of year (Nov, May/Jun…)"], ["province", "Province (GP, KZN, WC… / National / IEB)"], ["paper", "Paper no."], ["language", "Language"]];
 
 export const MetaEditor = ({ job, onJobChange }) => {
   const [open, setOpen] = useState(false);
@@ -27,7 +27,7 @@ export const MetaEditor = ({ job, onJobChange }) => {
           <DialogDescription className="text-xs text-[var(--pc-text2)]">Used for file names and memo matching.</DialogDescription>
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.map(([k, l]) => (
-              <label key={k} className="space-y-1">
+              <label key={k} className={`space-y-1 ${k === "province" || k === "session" ? "col-span-2" : ""}`}>
                 <span className="text-[11px] font-mono uppercase tracking-wider text-[var(--pc-muted)]">{l}</span>
                 <input data-testid={`meta-input-${k}`} value={meta[k] || ""} onChange={(e) => setMeta({ ...meta, [k]: e.target.value })}
                   className="w-full px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] text-sm focus:outline-none focus:border-[var(--pc-amber)]" />

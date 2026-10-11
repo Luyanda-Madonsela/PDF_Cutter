@@ -13,7 +13,10 @@ export const QuestionCard = ({ jobId, q, onOpen, index, hasPartner }) => (
         className="w-full object-cover object-top group-hover:scale-[1.02] transition-transform duration-300" />
     </div>
     <div className="p-3 flex items-center justify-between gap-2 border-t border-[var(--pc-border)]">
-      <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
+        {q.marks != null && <span data-testid={`question-marks-${q.order}`} className="font-mono text-[11px] text-[var(--pc-text2)]">{q.marks}m</span>}
+      </span>
       <span className="font-mono text-[11px] text-[var(--pc-muted)] flex items-center gap-1.5">
         {hasPartner && <BookCheck data-testid={`question-has-partner-${q.order}`} className="h-3.5 w-3.5 text-[var(--pc-emerald)]" />}
         {q.pages.length > 1 && <Layers className="h-3 w-3 text-[var(--pc-amber)]" />}

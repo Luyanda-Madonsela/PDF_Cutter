@@ -15,8 +15,11 @@ export const QuestionDialog = ({ job, qid, onClose, onJobChange }) => {
   const idx = job.questions.findIndex((q) => q.id === qid);
   const q = job.questions[idx];
   const [label, setLabel] = useState(q?.label || "");
+  const [marks, setMarks] = useState(q?.marks ?? "");
   const [tab, setTab] = useState("question");
-  useEffect(() => { setLabel(q?.label || ""); }, [q?.label]);
+  useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); }, [q?.label, q?.marks]);
+  const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? ""));
+  const saveDetails = () => updateQuestion(job.id, q.id, marks === "" ? { label, clear_marks: true } : { label, marks: Number(marks) });
 
   const partnerQid = q && job.pair_map?.[q.id];
   const partner = job.paired;
@@ -34,7 +37,7 @@ export const QuestionDialog = ({ job, qid, onClose, onJobChange }) => {
         {q && (
           <>
             <div className="flex items-center justify-between gap-3 pr-8 flex-wrap">
-              <div><DialogTitle className="font-heading text-xl">Question {q.label}</DialogTitle><DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}</DialogDescription></div>
+              <div><DialogTitle className="font-heading text-xl">Question {q.label}</DialogTitle><DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}{q.marks != null ? ` · ${q.marks} marks` : ""}</DialogDescription></div>
               <a data-testid={PC.lightboxDownload} href={imageUrl(job.id, q.id) + v} download={q.filename} className="pc-btn-secondary text-xs font-mono">
                 <Download className="h-4 w-4" /> {q.filename}
               </a>
@@ -55,7 +58,9 @@ export const QuestionDialog = ({ job, qid, onClose, onJobChange }) => {
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--pc-border)]">
               <input data-testid={PC.labelInput} value={label} onChange={(e) => setLabel(e.target.value)}
                 className="w-28 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
-              <button data-testid={PC.labelSave} disabled={!label.trim() || label === q.label} onClick={() => act(() => updateQuestion(job.id, q.id, { label }), "Label updated")} className="pc-btn-secondary text-sm disabled:opacity-40">Rename</button>
+              <input data-testid="question-marks-input" type="number" min="0" value={marks} placeholder="marks" onChange={(e) => setMarks(e.target.value)}
+                className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
+              <button data-testid={PC.labelSave} disabled={!label.trim() || !dirty} onClick={() => act(saveDetails, "Question updated")} className="pc-btn-secondary text-sm disabled:opacity-40">Save</button>
               <div className="flex-1" />
               {idx < job.questions.length - 1 && (
                 <button data-testid={PC.mergeNext} onClick={() => act(() => mergeNext(job.id, q.id), `Merged Q${job.questions[idx + 1].label} into Q${q.label}`)} className="pc-btn-secondary text-sm">
