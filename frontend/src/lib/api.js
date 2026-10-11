@@ -31,6 +31,7 @@ export const deleteSet = (id) => axios.delete(`${API}/sets/${id}`);
 export const setZipUrl = (id) => `${API}/sets/${id}/zip`;
 
 export const retryJob = (id) => axios.post(`${API}/jobs/${id}/retry`);
+export const stopJob = (id) => axios.post(`${API}/jobs/${id}/stop`);
 export const deleteJob = (id) => axios.delete(`${API}/jobs/${id}`);
 export const updateQuestion = (id, qid, body) => axios.put(`${API}/jobs/${id}/questions/${qid}`, body).then(data);
 export const reviewQuestion = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/review`).then(data);
@@ -60,6 +61,8 @@ export const getAiUsage = (days) => axios.get(`${API}/ai/usage`, { params: { day
 export const setAiPrice = (model, input, output) => axios.put(`${API}/ai/prices`, { model, input, output }).then(data);
 export const getBudget = () => axios.get(`${API}/ai/budget`).then(data);
 export const setBudget = (monthly_limit) => axios.put(`${API}/ai/budget`, { monthly_limit }).then(data);
+export const skeletonOptions = () => axios.get(`${API}/drive/skeleton/options`).then(data);
+export const buildSkeleton = (qualifications, year_from, year_to) => axios.post(`${API}/drive/skeleton`, { qualifications, year_from, year_to }).then(data);
 export const testAi = () => axios.post(`${API}/ai/test`).then(data);
 export const undoCrop = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/undo-crop`).then(data);
 export const recropSet = (id) => axios.post(`${API}/sets/${id}/recrop`).then(data);

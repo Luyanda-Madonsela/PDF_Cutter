@@ -26,6 +26,8 @@ for _g in range(12, 6, -1):
         if _f:
             FILES[(str(_g), _key)] = _f
 CATALOGUES = {f"gr{g}-{subj}": (f, g) for (g, subj), f in FILES.items()}
+from intl import QUALS, qual_for, file_name as _intl_file, series_name, variant_of  # noqa: E402
+CATALOGUES.update({f"intl-{k}": (_intl_file(q), q["level"]) for k, q in QUALS.items() if (CAT_DIR / _intl_file(q)).exists()})
 SHEETS = {"National": "DBE", "IEB": "IEB", "KZN": "KZN", "EC": "Eastern Cape", "WC": "Western Cape", "GP": "Gauteng",
           "NW": "North West", "FS": "Free State", "MP": "Mpumalanga", "LP": "Limpopo"}
 TITLE_SESSIONS = [("NOV", "Nov"), ("SEPT", "Sep"), ("MAY", "May/Jun"), ("JUN", "May/Jun"), ("FEB", "Feb/Mar"), ("MAR", "Feb/Mar"), ("EXEMPLAR", "Exemplar")]
@@ -37,6 +39,10 @@ def is_grey(cell) -> bool:
 
 
 def catalogue_key(meta) -> Optional[str]:
+    q = qual_for(meta)
+    if q:
+        key = f"intl-{q['code'].lower()}"
+        return key if key in CATALOGUES else None
     subj = (meta.subject or "").strip().lower()
     for key, aliases in SUBJECT_ALIASES.items():
         if subj in aliases and (meta.grade, key) in FILES:
@@ -45,7 +51,7 @@ def catalogue_key(meta) -> Optional[str]:
 
 
 def _title_session(title: str) -> str:
-    up = title.upper().split("-", 1)[-1]
+    up = title.upper().split("PAST PAPERS", 1)[-1]
     return next((v for k, v in TITLE_SESSIONS if k in up), "")
 
 
@@ -65,7 +71,9 @@ def parse_blocks(ws) -> List[dict]:
     blocks = []
     for i, t in enumerate(titles):
         title = str(ws.cell(t, 2).value).strip()
-        m = re.search(r"\(?P(\d)\)?", title.split("-", 1)[-1])
+        tail = title.upper().split("PAST PAPERS", 1)[-1]
+        m = re.search(r"\(?P(\d)", tail)
+        vm = re.search(r"(?:V|TZ)(\d)\)", tail)
         cols, errata_col = [], None
         for c in range(3, ws.max_column + 1):
             top = val(t + 1, c)
@@ -84,7 +92,7 @@ def parse_blocks(ws) -> List[dict]:
                 rows[ym.group(1)] = r
                 if is_grey(ws.cell(r, 2)):
                     grey.add(ym.group(1))
-        blocks.append({"title": title, "session": _title_session(title), "paper": m.group(1) if m else "",
+        blocks.append({"title": title, "session": _title_session(title), "paper": m.group(1) if m else "", "variant": vm.group(1) if vm else "",
                        "cols": cols, "errata_col": errata_col, "rows": rows, "grey": grey})
     return blocks
 
@@ -112,6 +120,9 @@ def locate(meta) -> dict:
     if not key:
         return {"found": False, "reason": "No catalogue for this subject/grade"}
     struct = structure(key)
+    q = qual_for(meta)
+    if q:
+        return _locate_intl(key, struct, q, meta)
     if getattr(meta, "school", ""):
         tb = _find_block(struct.get("DBE", []), meta, False)
         return {"key": key, "workbook": CATALOGUES[key][0], "sheet": SCHOOL_SHEET, "found": True, "school": True,
@@ -134,6 +145,22 @@ def locate(meta) -> dict:
         return {**base, "found": False, "topics": topics, "block": block["title"],
                 "reason": f"{meta.year} is greyed out in {block['title']} (no such exam on record). Check the paper details"}
     return {**base, "found": True, "topics": topics, "block": block["title"], "row": row, "row_label": f"{meta.session} {meta.year}"}
+
+
+def _locate_intl(key, struct, q, meta) -> dict:
+    sheet = series_name(q, meta.session)
+    paper, var = meta.paper or q["papers"][0], str(variant_of(q, meta))
+    blocks = struct.get(sheet, [])
+    block = next((b for b in blocks if b["paper"] == paper and (b["variant"] in ("", var))), None)
+    base = {"key": key, "workbook": CATALOGUES[key][0], "sheet": sheet, "topics": q["topics"].get(paper, [])}
+    if not block:
+        return {**base, "found": False, "reason": f"No P{paper} variant {var} block on sheet {sheet}"}
+    row = block["rows"].get(meta.year)
+    if not row:
+        return {**base, "found": False, "block": block["title"], "reason": f"No {meta.year} row in {block['title']}"}
+    if meta.year in block.get("grey", ()):
+        return {**base, "found": False, "block": block["title"], "reason": f"{meta.year} is greyed out in {block['title']} (no such exam on record)"}
+    return {**base, "found": True, "block": block["title"], "row": row, "row_label": f"{sheet} {meta.year}"}
 
 
 def topic_cells(questions: List[dict]) -> Dict[str, str]:

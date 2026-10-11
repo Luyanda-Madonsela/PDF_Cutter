@@ -72,7 +72,7 @@ PROMPTS = {"question_paper": QP_PROMPT, "memo": MEMO_PROMPT, "addendum": ADDENDU
 
 META_PROMPT = """This is the first page of a South African high school exam document.
 Extract metadata. Respond with ONLY JSON, no markdown:
-{"subject":"Mathematics","grade":"12","year":"2024","session":"Nov","province":"National","paper":"1","language":"English","doc_type":"question_paper","school":"","assessment":"","term":""}
+{"subject":"Mathematics","grade":"12","year":"2024","session":"Nov","province":"National","paper":"1","language":"English","doc_type":"question_paper","school":"","assessment":"","term":"","curriculum":"","qualification":"","variant":""}
 Rules:
 - subject: short English subject name (e.g. "Mathematics", "Physical Sciences", "Life Sciences", "Accounting", "English HL", "Afrikaans FAL"). Translate Afrikaans names.
 - grade: digits only. year: 4 digits.
@@ -84,6 +84,10 @@ Rules:
 - school: ONLY for tests set by a single school (school name/crest in the header, no department or IEB branding): the school's name, e.g. "Westville Boys' High School". Otherwise "".
 - assessment: for school tests one of "Test", "Control Test", "Exam", "Assignment", "Investigation", "Project"; otherwise "".
 - term: for school tests the term number "1"-"4" if stated (or implied by month: Jan-Mar 1, Apr-Jun 2, Jul-Sep 3, Oct-Dec 4); otherwise "". For school tests leave province "".
+- curriculum: "cambridge" for Cambridge Assessment International Education (CAIE/CIE: IGCSE, O Level, AS & A Level, Checkpoint), "ib" for International Baccalaureate Diploma, "nbt" for National Benchmark Tests; otherwise "".
+- qualification: Cambridge syllabus code (e.g. "0580", "0625", "9709", "1112"); for IB one of "IB-MAA-SL", "IB-MAA-HL", "IB-MAI-SL", "IB-MAI-HL", "IB-PHY-SL", "IB-PHY-HL", "IB-CHE-SL", "IB-CHE-HL"; for NBT "NBT-AQL" or "NBT-MAT"; otherwise "".
+- For Cambridge, "0580/22" means paper "2" variant "2" (component 22). session: "Feb/Mar", "May/Jun" or "Oct/Nov" (Checkpoint: "Apr" or "Oct"). Mark schemes are doc_type "memo"; inserts are "addendum".
+- variant: Cambridge variant digit ("1"-"3"); for IB the time zone digit ("TZ1" -> "1", "TZ2" -> "2", no time zone -> "0"); otherwise "".
 - Use "" for anything not visible."""
 
 

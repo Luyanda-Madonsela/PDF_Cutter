@@ -19,6 +19,7 @@ from auth import require_user, User
 from models import PaperSet
 from jobs import load_set, set_jobs, compute_links, norm_label
 from catalogue import CATALOGUES, SUBJECT_ALIASES, catalogue_key, build_workbook
+from intl import QUALS, qual_for, catalogue_path, skeleton_paths, paper_path as intl_paper_path, YEARS
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER = "application/vnd.google-apps.folder"
@@ -257,11 +258,31 @@ def paper_folder(meta, root: List[str]) -> List[str]:
     return base + [SESSION_FOLDERS.get(meta.session, "Misc"), PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
 
 
+CAT_SUBJECT_FOLDERS = {"maths": "Mathematics", "maths-lit": "Mathematical Literacy", "physical-sciences": "Physical Sciences",
+                       "natural-sciences": "Natural Sciences", "technical-maths": "Technical Maths", "technical-science": "Technical Science"}
+
+
+def parent_of(root: List[str]) -> List[str]:
+    """Past Paper Database level: the folder above 'CAPS & IEB Past Papers'."""
+    return root[:-1] if len(root) > 1 else root
+
+
+def catalogue_folder(key: str, meta, root: List[str]) -> List[str]:
+    q = qual_for(meta)
+    if q:
+        return catalogue_path(q, parent_of(root))
+    grade, subj = key.split("-", 1)
+    return parent_of(root) + ["Catalogues", "CAPS & IEB", f"Grade {grade[2:]}", CAT_SUBJECT_FOLDERS.get(subj, subj)]
+
+
 def plan_base(s: PaperSet, jobs, root: List[str]) -> List[str]:
     """Imported PDFs send their images back to the Drive paper folder they came from."""
     src = next((j.drive_source for j in sorted(jobs, key=lambda j: j.meta.doc_type != "question_paper")
                 if j.drive_source and j.drive_source.get("paper_folder_id")), None)
-    return [f"id:{src['paper_folder_id']}"] if src else paper_folder(s.meta, root)
+    if src:
+        return [f"id:{src['paper_folder_id']}"]
+    q = qual_for(s.meta)
+    return intl_paper_path(q, s.meta, parent_of(root)) if q else paper_folder(s.meta, root)
 
 
 def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
@@ -271,13 +292,15 @@ def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
     info = compute_links(jobs)
     by_id = {j.id: j for j in jobs}
     qmap = {(j.id, q.id): q for j in jobs for q in j.questions}
-    pdf_dir = {"question_paper": f"Paper_{n}", "memo": f"Memo_Paper_{n}", "addendum": "Addendum", "errata": "Errata"}
+    intl = qual_for(s.meta) is not None
+    pdf_dir = ({"question_paper": "Question Paper", "memo": "Memo", "addendum": "Addendum", "errata": "Errata"} if intl else
+               {"question_paper": f"Paper_{n}", "memo": f"Memo_Paper_{n}", "addendum": "Addendum", "errata": "Errata"})
     out = [{"path": base + [pdf_dir[j.meta.doc_type]], "name": j.filename, "storage": j.pdf_path, "mime": "application/pdf", "replace": False}
            for j in jobs if j.status == "done" and j.meta.doc_type in pdf_dir and not j.drive_source]
     qp = by_id.get(info["qp_id"])
     if not qp:
         return out
-    qroot = base + ["Questions", f"Paper_{n}"]
+    qroot = base + (["Questions"] if intl else ["Questions", f"Paper_{n}"])
     for q in qp.questions:
         qdir = qroot + [f"Question_{norm_label(q.label) or q.label}"]
         out.append({"path": qdir + ["Question"], "name": q.filename, "storage": q.storage_path, "mime": "image/png", "replace": True})
@@ -327,7 +350,7 @@ async def run_send(set_id: str):
         if key:
             entries = await catalogue_entries()
             wb = await asyncio.to_thread(build_workbook, key, entries[key])
-            await asyncio.to_thread(w.put, [*root, "Catalogues"], CATALOGUES[key][0], wb,
+            await asyncio.to_thread(w.put, catalogue_folder(key, s.meta, root), CATALOGUES[key][0], wb,
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", True)
             done += 1
         base = plan_base(s, jobs, root)
@@ -367,3 +390,56 @@ async def send_set(set_id: str, user: User = Depends(require_user)):
     await db.sets.update_one({"_id": set_id}, {"$set": {"drive": {"status": "queued"}}})
     start_send(set_id)
     return {"ok": True}
+
+
+class SkeletonIn(BaseModel):
+    qualifications: List[str]
+    year_from: int = 2015
+    year_to: int = 2027
+
+
+def _skeleton_list(body: "SkeletonIn", root: List[str]) -> List[List[str]]:
+    years = range(max(body.year_from, 2000), min(body.year_to, 2035) + 1)
+    paths = []
+    for code in body.qualifications:
+        q = QUALS.get(code.lower())
+        if not q:
+            raise HTTPException(400, f"Unknown qualification {code}")
+        paths += skeleton_paths(q, years, parent_of(root))
+    return paths
+
+
+@drive_api.get("/skeleton/options")
+async def skeleton_options(user: User = Depends(require_user)):
+    return {"qualifications": [{"code": q["code"], "label": q["label"], "curriculum": q["curriculum"],
+                                "folders_per_year": len(skeleton_paths(q, [2024], []))} for q in QUALS.values()],
+            "years": [YEARS.start, YEARS.stop - 1], "status": await db.settings.find_one({"_id": "drive_skeleton"}, {"_id": 0})}
+
+
+async def run_skeleton(paths: List[List[str]]):
+    try:
+        w = DriveWriter(await drive_service(), await root_path())
+        await db.settings.update_one({"_id": "drive_skeleton"}, {"$set": {"status": "running", "done": 0, "total": len(paths), "error": None}}, upsert=True)
+        for i, p in enumerate(paths, 1):
+            await asyncio.to_thread(w.folder, p)
+            if i % 10 == 0 or i == len(paths):
+                await db.settings.update_one({"_id": "drive_skeleton"}, {"$set": {"done": i}})
+        await db.settings.update_one({"_id": "drive_skeleton"}, {"$set": {"status": "done"}})
+    except Exception as e:
+        logger.exception("Drive skeleton failed")
+        await db.settings.update_one({"_id": "drive_skeleton"}, {"$set": {"status": "error", "error": str(e)[:300]}})
+    finally:
+        _tasks.pop("skeleton", None)
+
+
+@drive_api.post("/skeleton")
+async def build_skeleton(body: SkeletonIn, user: User = Depends(require_user)):
+    if not await db.drive_credentials.find_one({"_id": CRED_ID}, {"_id": 1}):
+        raise HTTPException(400, "Connect Google Drive first")
+    if "skeleton" in _tasks:
+        raise HTTPException(409, "A folder build is already running")
+    paths = _skeleton_list(body, await root_path())
+    if not paths:
+        raise HTTPException(400, "Pick at least one qualification")
+    _tasks["skeleton"] = asyncio.create_task(run_skeleton(paths))
+    return {"total": len(paths)}

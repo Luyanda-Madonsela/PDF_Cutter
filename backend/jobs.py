@@ -13,14 +13,14 @@ from catalogue import locate
 from imaging import page_jpeg, crop_parts, finalize, x_bounds, union_col, to_png
 
 CONCURRENCY = 6
-SESSIONS = [(("feb", "mar"), "Feb/Mar"), (("may", "jun"), "May/Jun"), (("sep",), "Sep"), (("nov",), "Nov"), (("exem",), "Exemplar")]
+SESSIONS = [(("feb", "mar"), "Feb/Mar"), (("may", "jun"), "May/Jun"), (("sep",), "Sep"), (("nov",), "Nov"), (("exem",), "Exemplar"), (("apr",), "Apr"), (("oct",), "Oct")]
 PROVINCES = [("gauteng", "GP"), ("kwazulu", "KZN"), ("kzn", "KZN"), ("western cape", "WC"), ("wced", "WC"), ("eastern cape", "EC"),
              ("free state", "FS"), ("limpopo", "LP"), ("mpumalanga", "MP"), ("north west", "NW"), ("northern cape", "NC"),
              ("ieb", "IEB"), ("national", "National"), ("dbe", "National"), ("nsc", "National")]
 PROVINCE_CODES = {"GP", "KZN", "WC", "EC", "FS", "LP", "MP", "NW", "NC", "IEB"}
 DOC_SUFFIX = {"memo": "MEMO", "addendum": "ADDENDUM", "errata": "ERRATA"}
 KEY_FIELDS = ("subject", "grade", "year", "session", "paper")
-SCHOOL_FIELDS = ("school", "term", "assessment")
+SCHOOL_FIELDS = ("school", "term", "assessment", "curriculum", "qualification", "variant")
 SOFT_FIELDS = ("province", "language")
 ACTIVE = ("queued", "classifying", "waiting", "ready", "processing")
 
@@ -51,6 +51,9 @@ def canon_meta(m: JobMeta) -> JobMeta:
     m.grade = re.sub(r"\D", "", m.grade or "")
     m.paper = re.sub(r"\D", "", m.paper or "")
     m.language = (m.language or "").strip().capitalize()
+    m.curriculum = (m.curriculum or "").strip().lower()
+    m.qualification = (m.qualification or "").strip().upper()
+    m.variant = re.sub(r"\D", "", m.variant or "")
     return m
 
 
@@ -70,7 +73,12 @@ def norm_label(label: str) -> str:
 def set_base_name(meta: JobMeta, fallback: str) -> str:
     if not meta.subject:
         return camel(Path(fallback).stem)
-    if meta.school:
+    if meta.curriculum in ("cambridge", "ib", "nbt"):
+        tag = {"cambridge": "CIE", "ib": "", "nbt": ""}[meta.curriculum]
+        var = (f"TZ{meta.variant}" if meta.curriculum == "ib" else f"V{meta.variant}") if meta.variant else ""
+        bits = [camel(meta.subject), camel(f"{tag} {meta.qualification}"), meta.year, camel(meta.session),
+                f"P{meta.paper}{var}" if meta.paper else var]
+    elif meta.school:
         bits = [camel(meta.subject), f"Gr{meta.grade}" if meta.grade else "", meta.year, camel(meta.school),
                 f"T{meta.term}" if meta.term else "", camel(meta.assessment), f"P{meta.paper}" if meta.paper else ""]
     else:
@@ -182,6 +190,8 @@ def set_status(jobs: List[Job]) -> str:
         return "error"
     if any(j.status == "paused" for j in jobs):
         return "paused"
+    if any(j.status == "stopped" for j in jobs):
+        return "stopped"
     if jobs and all(j.status == "done" for j in jobs):
         return "done"
     return "processing"
@@ -219,7 +229,7 @@ def compatible(a: JobMeta, b: JobMeta) -> bool:
 
 async def assign_set(job: Job) -> str:
     m = job.meta
-    if m.subject and m.grade and m.year:
+    if m.subject and (m.grade or m.curriculum) and m.year:
         query = {"is_deleted": False, "mode": "bulk"}
         for k in KEY_FIELDS:
             query[f"meta.{k}"] = {"$regex": f"^{re.escape(getattr(m, k))}$", "$options": "i"}
@@ -275,6 +285,8 @@ async def classify_job(job_id: str):
         await set_fields(job_id, meta=meta.model_dump(), total_pages=n, set_id=job.set_id, status="waiting", error=None)
     except BudgetExceeded as e:
         await set_fields(job_id, status="paused", paused_from="queued", error=str(e))
+    except asyncio.CancelledError:
+        await set_fields(job_id, status="stopped", error="Stopped by you. Press Retry to start again")
     except Exception as e:
         logger.exception("Classify failed")
         await set_fields(job_id, status="error", error=f"Could not read document: {e}")
@@ -423,6 +435,8 @@ async def process_job(job_id: str):
         await save_job(job)
     except BudgetExceeded as e:
         await set_fields(job_id, status="paused", paused_from="ready", pages_done=0, error=str(e))
+    except asyncio.CancelledError:
+        await set_fields(job_id, status="stopped", pages_done=0, error="Stopped by you. Press Retry to start again")
     except Exception as e:
         logger.exception("Job failed")
         await set_fields(job_id, status="error", error=str(e))
@@ -436,6 +450,17 @@ async def claim_next():
         if doc:
             return doc["_id"], new
     return None, None
+
+
+RUNNING: dict = {}
+
+
+def stop_job(job_id: str) -> bool:
+    task = RUNNING.get(job_id)
+    if task and not task.done():
+        task.cancel()
+        return True
+    return False
 
 
 async def resume_paused():
@@ -467,7 +492,15 @@ async def worker_loop():
             job = await load_job(job_id)
             if job and job.set_id:
                 await refresh_set(job.set_id)
-            await (classify_job(job_id) if stage == "classifying" else process_job(job_id))
+            task = asyncio.create_task(classify_job(job_id) if stage == "classifying" else process_job(job_id))
+            RUNNING[job_id] = task
+            try:
+                await asyncio.wait({task})
+            finally:
+                RUNNING.pop(job_id, None)
+            job = await load_job(job_id)
+            if job and job.set_id:
+                await refresh_set(job.set_id)
         except Exception:
             logger.exception("Worker error")
             await asyncio.sleep(5)

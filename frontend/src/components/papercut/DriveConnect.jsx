@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { HardDrive, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { DriveSkeleton } from "./DriveSkeleton";
 import { driveStatus, driveConnect, driveDisconnect, saveDriveSettings } from "@/lib/api";
 
 const NOTICES = {
@@ -26,7 +27,7 @@ const DriveDialog = ({ st, setSt, open, onOpenChange }) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="drive-settings-dialog" className="bg-[var(--pc-surface)] border-[var(--pc-border)] text-[var(--pc-text)] max-w-lg">
+      <DialogContent data-testid="drive-settings-dialog" className="bg-[var(--pc-surface)] border-[var(--pc-border)] text-[var(--pc-text)] max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-heading">Google Drive</DialogTitle>
           <DialogDescription data-testid="drive-settings-status" className="text-[var(--pc-text2)]">
@@ -50,6 +51,7 @@ const DriveDialog = ({ st, setSt, open, onOpenChange }) => {
                 {busy === "connect" ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />} Connect Drive
               </button>}
         </div>
+        {st.connected && <DriveSkeleton />}
       </DialogContent>
     </Dialog>
   );

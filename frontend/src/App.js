@@ -8,7 +8,7 @@ import { SetView } from "@/components/papercut/SetView";
 import { QueuePanel } from "@/components/papercut/QueuePanel";
 import { CataloguesPanel } from "@/components/papercut/CataloguesPanel";
 import { DriveImport } from "@/components/papercut/DriveImport";
-import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, ACTIVE_DOC } from "@/lib/api";
+import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, stopJob, ACTIVE_DOC } from "@/lib/api";
 
 const UPLOAD_CONCURRENCY = 3;
 
@@ -65,6 +65,10 @@ function App() {
   const reload = () => { if (set) openSet(set.id); refresh(); };
   const docHandlers = {
     onRetry: async (id) => { await retryJob(id); reload(); },
+    onStop: async (id) => {
+      try { await stopJob(id); toast.success("Stopped. Press Retry when you want it to run again"); } catch (e) { toast.error(e.response?.data?.detail || "Could not stop"); }
+      reload();
+    },
     onDelete: async (id) => { await deleteJob(id); reload(); },
     onAdd: async (type, files) => {
       try { for (const f of files) await uploadDoc(f, { setId: set.id, docType: type }); toast.success("Added to set"); }

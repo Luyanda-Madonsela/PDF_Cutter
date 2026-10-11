@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 14 (recorded as iteration_13.json since iteration_13 wasn't present among report files). Full test of iter14 features: (1) AI monthly spending limit (BudgetExceeded) in llm.reserve + /api/ai/budget GET/PUT, (2) school-made tests (JobMeta school/assessment/term, catalogue.locate 'School Tests' sheet, build_workbook, jobs.set_base_name school layout, drive.paper_folder Misc/{School}), (3) Drive sub-question folders Question_{full-label}. New test file /app/backend/tests/test_iter14.py: 10/10 passed, including live pause/resume via cloned IEB set (QP job -> paused in <90s with paused_from='ready', set status 'paused', resumes after limit lift). Regression /app/backend/tests/test_iter11.py + test_iter10.py + test_auth.py: 37/37 passed. Frontend verified via Playwright: AI model dialog > Usage & cost tab shows ai-budget-panel + ai-budget-spent + ai-budget-input + ai-budget-save; after Set limit the ai-budget-clear 'Remove' button appears; MetaEditor dialog has meta-input-school, meta-input-assessment, meta-input-term. monthly_limit restored to null at end (verified via GET /api/ai/budget).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter14.py",
+    "/app/test_reports/pytest/iter14_results.xml",
+    "/app/test_reports/pytest/iter14_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "llm.reserve() correctly short-circuits when the model has no price (prevents spend blind spots) and uses a module-level asyncio.Lock around spent + reserved + est-cost math to avoid concurrent over-reservation.",
+    "jobs.resume_paused is wired both to budget save (PUT /api/ai/budget triggers it) and to the ~60s idle worker loop — good safety net if a job pauses between PUTs.",
+    "jobs.set_base_name correctly branches on meta.school (school test naming) vs session/province (standard). The order of fields in the school branch matches the spec: Subject_GrN_Year_School_Tn_Assessment_Pn.",
+    "drive.plan_uploads now uses norm_label(q.label) for Question_X.Y folders (sub-question granularity) with Hints and Video sub-folders stubbed as name:None entries — the uploader must skip name:None (verified it does in writer code paths).",
+    "catalogue.write_school_sheet rebuilds the 'School Tests' sheet from scratch every call (`del wb[SCHOOL_SHEET]` then create) — simple and deterministic, no stale rows.",
+    "Minor: llm.month_spend swallows unpriced models into a set but doesn't surface which jobs/models produced spend without price in the GET /api/ai/budget response beyond names — acceptable, UI already shows per-model table in Usage & cost."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter14.py (new)"],
+  "success_rate": {"backend": "100% (10/10 new + 37/37 regression)", "frontend": "100% (budget UI + MetaEditor school fields verified)"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut (also cookie session_token)",
+  "seed_data_creation": "test_pause_resume_on_cloned_set and test_patch_set_meta_school_renames each clone the IEB set via tests/clone_set.py, mutate the clone (QP status, meta patch, base_name), then soft-delete (is_deleted=True) the cloned set + its jobs in the finally block. No mutation to the original 50 real-PDF sets or db.drive_credentials. monthly_limit set to null after every test via autouse fixture.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter14.py uses a single module-level asyncio loop with motor (same pattern as iter12/iter13) so run with -n 0 if invoking standalone. Pause test waits up to 90s for the ~60s worker tick; adjust the loop count if the worker interval changes. clone_set.py prints the new set UUID on the LAST line of stdout.",
+  "rca of the issue": "N/A — all green."
+}

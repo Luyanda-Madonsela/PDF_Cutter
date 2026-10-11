@@ -11,7 +11,7 @@ from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TY
 from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
-                  erase_proposals, ERASE_FLAG, match_topic)
+                  erase_proposals, ERASE_FLAG, match_topic, stop_job)
 from syllabus import rename
 
 api = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
@@ -290,11 +290,27 @@ async def get_page(job_id: str, page: int):
     return Response(content=await get_object(job.page_paths[page]), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
 
+@api.post("/jobs/{job_id}/stop")
+async def stop_document(job_id: str):
+    job = await job_or_404(job_id)
+    if job.status not in ("queued", "classifying", "ready", "processing", "paused"):
+        raise HTTPException(400, "This document is not being worked on")
+    if not stop_job(job_id):  # not running yet: just take it out of the queue
+        await set_fields(job_id, status="stopped", pages_done=0, error="Stopped by you. Press Retry to start again")
+    for _ in range(20):
+        if (await load_job(job_id)).status == "stopped":
+            break
+        await asyncio.sleep(0.25)
+    if job.set_id:
+        await refresh_set(job.set_id)
+    return {"ok": True}
+
+
 @api.post("/jobs/{job_id}/retry")
 async def retry_job(job_id: str):
     job = await job_or_404(job_id)
-    if job.status != "error":
-        raise HTTPException(400, "Only failed documents can be retried")
+    if job.status not in ("error", "stopped"):
+        raise HTTPException(400, "Only failed or stopped documents can be retried")
     await set_fields(job_id, status="queued", error=None, pages_done=0, questions=[])
     if job.set_id:
         await refresh_set(job.set_id)

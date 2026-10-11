@@ -22,7 +22,7 @@ export const CataloguesPanel = ({ refreshKey }) => {
       <div className="flex gap-1 mb-3 flex-wrap">
         {grades.map((g) => (
           <button key={g} data-testid={`catalogue-grade-${g}`} onClick={() => setGrade(g)}
-            className={`px-2 py-1 rounded text-xs font-mono transition-colors ${grade === g ? "bg-[var(--pc-amber)] text-[#0B0F19]" : "text-[var(--pc-text2)] hover:bg-[var(--pc-surface2)]"}`}>Gr {g}</button>
+            className={`px-2 py-1 rounded text-xs font-mono transition-colors ${grade === g ? "bg-[var(--pc-amber)] text-[#0B0F19]" : "text-[var(--pc-text2)] hover:bg-[var(--pc-surface2)]"}`}>{/^\d+$/.test(g) ? `Gr ${g}` : g}</button>
         ))}
       </div>
       <ul className="space-y-1 -mx-2">

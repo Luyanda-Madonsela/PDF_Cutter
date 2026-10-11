@@ -61,6 +61,9 @@ class JobMeta(BaseModel):
     school: str = ""  # school-set tests only
     assessment: str = ""  # Test / Control Test / Exam / Assignment / Investigation / Project
     term: str = ""  # 1-4
+    curriculum: str = ""  # "" = CAPS/IEB, or cambridge / ib / nbt
+    qualification: str = ""  # syllabus code, e.g. 0580, 9709, IB-MAA-HL, NBT-MAT
+    variant: str = ""  # Cambridge variant 1-3 or IB time zone 0-2
 
 
 class Job(BaseDocument):

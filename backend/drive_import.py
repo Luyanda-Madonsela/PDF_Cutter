@@ -13,7 +13,7 @@ from drive import drive_service, _retry, FOLDER
 
 import_api = APIRouter(prefix="/api/drive", dependencies=[Depends(require_user)])
 PDF_Q = "mimeType='application/pdf' and trashed=false and not appProperties has { key='papercut' and value='1' }"
-PAPER_DIRS = re.compile(r"^(Paper_\d+|Memo_Paper_\d+|Addendum|Errata)$", re.I)
+PAPER_DIRS = re.compile(r"^(Paper_\d+|Memo_Paper_\d+|Addendum|Errata|Question Paper|Memo)$", re.I)
 STATUS_ID = "drive_import"
 _task: Optional[asyncio.Task] = None
 
