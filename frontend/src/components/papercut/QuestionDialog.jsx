@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
 import { LinkedList } from "./LinkedEditor";
+import { DifficultyPicker } from "./DifficultyPicker";
 import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop, DIFFICULTY } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
@@ -71,6 +72,8 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
                 <EraseReview doc={doc} q={q} onDecide={(boxes, manual) => act(() => decideErase(doc.id, q.id, boxes, manual), boxes.length + manual.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
               </TabsContent>
               <TabsContent value="adjust">
+                <DifficultyPicker testId="crop-difficulty" value={q.difficulty}
+                  onPick={(d) => act(() => updateQuestion(doc.id, q.id, { difficulty: d }), `Difficulty set to ${DIFFICULTY[d][0]}`)} />
                 <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
                   onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))}
                   onUndoSaved={() => act(() => undoCrop(doc.id, q.id), "Previous crop restored")} />

@@ -365,6 +365,22 @@ async def edit_and_return(job: Job, set_id: Optional[str]):
     return job.model_dump(exclude=JOB_EXCLUDE)
 
 
+async def set_qp_difficulty(job: Job, q, difficulty):
+    """Memo/addendum/errata edits change the matching question-paper question; refresh_set copies it back."""
+    qp = next((j for j in await set_jobs(job.set_id) if j.meta.doc_type == "question_paper" and j.status == "done"), None) if job.set_id else None
+    n = norm_label(q.label)
+    hits = [x for x in qp.questions if norm_label(x.label) == n] if qp else []
+    hits = hits or ([x for x in qp.questions if norm_label(x.label).startswith(n + ".")] if qp else [])
+    if not hits:
+        raise HTTPException(400, f"No Q{q.label} in the question paper to rate")
+    for x in hits:
+        x.difficulty = difficulty
+        x.flags = [f for f in x.flags if f != DIFF_FLAG]
+    s = await load_set(job.set_id)
+    renumber(qp, s.base_name)
+    await save_job(qp)
+
+
 def find_idx(job: Job, qid: str) -> int:
     idx = next((i for i, q in enumerate(job.questions) if q.id == qid), None)
     if idx is None:
@@ -397,6 +413,8 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
             raise HTTPException(400, "Difficulty must be Easy, Medium or Hard")
         q.difficulty = body.difficulty or None
         q.flags = [f for f in q.flags if f != DIFF_FLAG]
+        if job.meta.doc_type != "question_paper":
+            await set_qp_difficulty(job, q, q.difficulty)
     if body.parts is not None:
         if not body.parts:
             raise HTTPException(400, "At least one crop region required")
