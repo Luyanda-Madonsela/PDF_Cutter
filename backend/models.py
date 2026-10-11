@@ -58,12 +58,16 @@ class JobMeta(BaseModel):
     province: str = ""
     language: str = ""
     doc_type: str = "question_paper"
+    school: str = ""  # school-set tests only
+    assessment: str = ""  # Test / Control Test / Exam / Assignment / Investigation / Project
+    term: str = ""  # 1-4
 
 
 class Job(BaseDocument):
     filename: str
     pdf_path: str = ""
     drive_source: Optional[dict] = None  # {file_id, paper_folder_id} when imported from Google Drive
+    paused_from: Optional[str] = None  # status to resume to after a spending-limit pause
     is_deleted: bool = False
     # queued -> classifying -> waiting (set incomplete) -> ready -> processing -> done | error
     status: str = "queued"

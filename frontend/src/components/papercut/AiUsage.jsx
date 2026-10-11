@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { getAiUsage, setAiPrice } from "@/lib/api";
+import { AiBudget } from "./AiBudget";
 
 const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 const usd = (v) => (v == null ? "—" : `$${v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2)}`);
@@ -30,6 +31,7 @@ export const AiUsage = () => {
   if (!u) return <Loader2 className="h-5 w-5 animate-spin text-[var(--pc-amber)]" />;
   return (
     <div data-testid="ai-usage-panel" className="space-y-3">
+      <AiBudget />
       <div className="flex items-center justify-between gap-2">
         <div>
           <div data-testid="ai-usage-total-cost" className="font-heading text-2xl font-bold">{usd(u.total_cost)}</div>

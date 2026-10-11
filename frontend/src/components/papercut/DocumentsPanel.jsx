@@ -5,7 +5,8 @@ import { DOC_LABEL, ACTIVE_DOC } from "@/lib/api";
 const DocRow = ({ d, onRetry, onDelete }) => {
   const active = ACTIVE_DOC.includes(d.status);
   const statusText = d.status === "processing" ? `AI reading pages ${d.pages_done}/${d.total_pages || "?"}`
-    : d.status === "waiting" ? "Waiting for the rest of the set" : d.status === "classifying" ? "Reading cover" : d.status;
+    : d.status === "waiting" ? "Waiting for the rest of the set" : d.status === "classifying" ? "Reading cover"
+    : d.status === "paused" ? `Paused: ${d.error || "spending limit reached"}` : d.status;
   return (
     <li data-testid={`doc-row-${d.id}`} className="flex items-center gap-3 py-2">
       {d.status === "done" ? <CheckCircle2 className="h-4 w-4 text-[var(--pc-emerald)] shrink-0" />
@@ -41,6 +42,7 @@ export const DocumentsPanel = ({ set, onRetry, onDelete, onAdd }) => {
   const types = new Set(set.documents.map((d) => d.meta.doc_type));
   return (
     <div data-testid="documents-panel" className="pt-4 border-t border-[var(--pc-border)]">
+      {set.status === "paused" && <p data-testid="budget-paused-warning" className="mb-3 text-sm text-[var(--pc-amber)]">Paused because the monthly AI spending limit was reached. It resumes when you raise the limit (AI settings, Usage & cost) or next month.</p>}
       {set.status === "needs_memo" && <p data-testid="needs-memo-warning" className="mb-3 text-sm text-red-300">This paper has no memo yet — it won't be split until you add one.</p>}
       {set.status === "needs_paper" && <p data-testid="needs-paper-warning" className="mb-3 text-sm text-red-300">No question paper in this set yet — add it to start splitting.</p>}
       <ul className="divide-y divide-[var(--pc-border)]">

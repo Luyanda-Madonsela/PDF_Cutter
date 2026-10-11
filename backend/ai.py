@@ -2,7 +2,7 @@ import re
 import json
 import asyncio
 from core import logger
-from llm import ai_settings, resolve, complete
+from llm import ai_settings, resolve, complete, BudgetExceeded
 
 COMMON_RULES = """- Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments are in top-to-bottom order and do not overlap.
 - EXCLUDE page headers, footers, page numbers, "Copyright reserved", "Please turn over / Blaai om", exam centre / candidate boxes.
@@ -72,7 +72,7 @@ PROMPTS = {"question_paper": QP_PROMPT, "memo": MEMO_PROMPT, "addendum": ADDENDU
 
 META_PROMPT = """This is the first page of a South African high school exam document.
 Extract metadata. Respond with ONLY JSON, no markdown:
-{"subject":"Mathematics","grade":"12","year":"2024","session":"Nov","province":"National","paper":"1","language":"English","doc_type":"question_paper"}
+{"subject":"Mathematics","grade":"12","year":"2024","session":"Nov","province":"National","paper":"1","language":"English","doc_type":"question_paper","school":"","assessment":"","term":""}
 Rules:
 - subject: short English subject name (e.g. "Mathematics", "Physical Sciences", "Life Sciences", "Accounting", "English HL", "Afrikaans FAL"). Translate Afrikaans names.
 - grade: digits only. year: 4 digits.
@@ -81,6 +81,9 @@ Rules:
 - paper: digits only ("1","2","3") or "" if none.
 - language: "English" or "Afrikaans" (language of the document).
 - doc_type: "memo" for marking guidelines / memorandum / nasienriglyne; "addendum" for addendum / annexure / bylae / answer book inserts with diagrams; "errata" for erratum / errata / correction notices; otherwise "question_paper".
+- school: ONLY for tests set by a single school (school name/crest in the header, no department or IEB branding): the school's name, e.g. "Westville Boys' High School". Otherwise "".
+- assessment: for school tests one of "Test", "Control Test", "Exam", "Assignment", "Investigation", "Project"; otherwise "".
+- term: for school tests the term number "1"-"4" if stated (or implied by month: Jan-Mar 1, Apr-Jun 2, Jul-Sep 3, Oct-Dec 4); otherwise "". For school tests leave province "".
 - Use "" for anything not visible."""
 
 
@@ -104,6 +107,8 @@ async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
     for attempt in range(3):
         try:
             return parse_json(await complete(cfg, prompt, img_b64, f"{session_id}-{attempt}"))
+        except BudgetExceeded:
+            raise
         except Exception as e:
             last_err = e
             logger.warning(f"{session_id} attempt {attempt} failed: {e}")
@@ -150,6 +155,8 @@ async def detect_meta(img_b64: str, session_id: str) -> dict:
     try:
         data = await ask_json(META_PROMPT, img_b64, session_id)
         return {k: str(v or "").strip() for k, v in data.items()}
+    except BudgetExceeded:
+        raise
     except Exception as e:
         logger.warning(f"Meta detection failed: {e}")
         return {}

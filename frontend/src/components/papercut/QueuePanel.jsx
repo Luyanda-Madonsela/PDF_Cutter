@@ -11,6 +11,7 @@ export const SET_STATUS = {
   processing: ["Processing", "text-[var(--pc-amber)]"],
   done: ["Done", "text-[var(--pc-emerald)]"],
   error: ["Failed", "text-red-400"],
+  paused: ["Paused: spending limit", "text-[var(--pc-amber)]"],
 };
 const FILTERS = [["all", "All"], ["incomplete", "Incomplete"], ["flagged", "Review"], ["done", "Done"], ["error", "Failed"]];
 const TILES = [["sorting", "Sorting"], ["needs_memo", "No memo"], ["processing", "Running"], ["done", "Done"], ["flagged", "Review"]];

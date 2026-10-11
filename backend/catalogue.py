@@ -112,6 +112,11 @@ def locate(meta) -> dict:
     if not key:
         return {"found": False, "reason": "No catalogue for this subject/grade"}
     struct = structure(key)
+    if getattr(meta, "school", ""):
+        tb = _find_block(struct.get("DBE", []), meta, False)
+        return {"key": key, "workbook": CATALOGUES[key][0], "sheet": SCHOOL_SHEET, "found": True, "school": True,
+                "topics": [n for _, n in tb["cols"]] if tb else [], "block": f"School tests P{meta.paper or '1'}",
+                "row_label": f"{meta.school} {meta.year} T{meta.term or '?'} {meta.assessment}".strip()}
     sheet = SHEETS.get(meta.province, "Misc")
     if sheet not in struct:
         sheet = "Misc"
@@ -154,12 +159,51 @@ def _write(ws, r, c, value):
         cell.value = value
 
 
+SCHOOL_SHEET = "School Tests"
+
+
+def write_school_sheet(wb, key: str, entries: List[dict]):
+    """App-managed sheet, rebuilt every time: one table per paper, one row per school test."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    if SCHOOL_SHEET in wb.sheetnames:
+        del wb[SCHOOL_SHEET]
+    ws = wb.create_sheet(SCHOOL_SHEET)
+    head = PatternFill("solid", start_color="FF1F2937", end_color="FF1F2937")
+    struct = structure(key)
+    papers = sorted({b["paper"] or "1" for b in struct.get("DBE", [])} or {"1"})
+    r = 2
+    for paper in papers:
+        tb = next((b for b in struct.get("DBE", []) if (b["paper"] or "1") == paper), None)
+        topics = [n for _, n in tb["cols"]] if tb else []
+        cols = ["Year", "School", "Term", "Assessment", "Errata"] + topics
+        ws.cell(r, 2, f"SCHOOL TESTS (P{paper})").font = Font(bold=True, size=13)
+        r += 1
+        for i, name in enumerate(cols):
+            c = ws.cell(r, 2 + i, name)
+            c.font, c.fill, c.alignment = Font(bold=True, color="FFFFFFFF"), head, Alignment(wrap_text=True, vertical="center")
+            ws.column_dimensions[c.column_letter].width = 14 if i < 5 else 18
+        r += 1
+        rows = [e for e in entries if (e["meta"].paper or "1") == paper]
+        rows.sort(key=lambda e: (e["meta"].year, e["meta"].school.lower(), e["meta"].term, e["meta"].assessment))
+        for e in rows:
+            m, cells = e["meta"], topic_cells(e["questions"])
+            vals = [m.year, m.school, f"Term {m.term}" if m.term else "", m.assessment, ", ".join(f"Q{x}" for x in e["errata"]) or None]
+            for i, v in enumerate(vals + [cells.get(t) for t in topics]):
+                ws.cell(r, 2 + i, v)
+            r += 1
+        if not rows:
+            ws.cell(r, 2, "No school tests yet").font = Font(italic=True, color="FF7F7F7F")
+            r += 1
+        r += 2
+
+
 def build_workbook(key: str, entries: List[dict]) -> bytes:
     """entries: [{meta, questions:[{label, topic}], errata:[labels]}]; later entries win on the same row."""
     wb = openpyxl.load_workbook(CAT_DIR / CATALOGUES[key][0])
+    write_school_sheet(wb, key, [e for e in entries if getattr(e["meta"], "school", "")])
     for e in entries:
         loc = locate(e["meta"])
-        if not loc.get("found"):
+        if not loc.get("found") or loc.get("school"):
             continue
         ws = wb[loc["sheet"]]
         block = next(b for b in structure(key)[loc["sheet"]] if b["title"] == loc["block"])

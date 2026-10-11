@@ -7,6 +7,7 @@ from typing import List, Optional
 import pymupdf
 from core import db, logger, put_object, get_object, APP_NAME
 from models import Job, JobMeta, Question, Part, PaperSet, DocSummary
+from llm import BudgetExceeded
 from ai import detect_segments, detect_meta
 from catalogue import locate
 from imaging import page_jpeg, crop_parts, finalize, x_bounds, union_col, to_png
@@ -19,6 +20,7 @@ PROVINCES = [("gauteng", "GP"), ("kwazulu", "KZN"), ("kzn", "KZN"), ("western ca
 PROVINCE_CODES = {"GP", "KZN", "WC", "EC", "FS", "LP", "MP", "NW", "NC", "IEB"}
 DOC_SUFFIX = {"memo": "MEMO", "addendum": "ADDENDUM", "errata": "ERRATA"}
 KEY_FIELDS = ("subject", "grade", "year", "session", "paper")
+SCHOOL_FIELDS = ("school", "term", "assessment")
 SOFT_FIELDS = ("province", "language")
 ACTIVE = ("queued", "classifying", "waiting", "ready", "processing")
 
@@ -68,8 +70,12 @@ def norm_label(label: str) -> str:
 def set_base_name(meta: JobMeta, fallback: str) -> str:
     if not meta.subject:
         return camel(Path(fallback).stem)
-    bits = [camel(meta.subject), f"Gr{meta.grade}" if meta.grade else "", meta.year, camel(meta.session),
-            camel(meta.province), f"P{meta.paper}" if meta.paper else ""]
+    if meta.school:
+        bits = [camel(meta.subject), f"Gr{meta.grade}" if meta.grade else "", meta.year, camel(meta.school),
+                f"T{meta.term}" if meta.term else "", camel(meta.assessment), f"P{meta.paper}" if meta.paper else ""]
+    else:
+        bits = [camel(meta.subject), f"Gr{meta.grade}" if meta.grade else "", meta.year, camel(meta.session),
+                camel(meta.province), f"P{meta.paper}" if meta.paper else ""]
     return "_".join(b for b in bits if b)
 
 
@@ -174,6 +180,8 @@ def set_status(jobs: List[Job]) -> str:
             return "needs_memo"
     if any(j.status == "error" for j in jobs):
         return "error"
+    if any(j.status == "paused" for j in jobs):
+        return "paused"
     if jobs and all(j.status == "done" for j in jobs):
         return "done"
     return "processing"
@@ -215,6 +223,9 @@ async def assign_set(job: Job) -> str:
         query = {"is_deleted": False, "mode": "bulk"}
         for k in KEY_FIELDS:
             query[f"meta.{k}"] = {"$regex": f"^{re.escape(getattr(m, k))}$", "$options": "i"}
+        for k in SCHOOL_FIELDS:
+            v = getattr(m, k)
+            query[f"meta.{k}"] = {"$regex": f"^{re.escape(v)}$", "$options": "i"} if v else {"$in": ["", None]}
         async for d in db.sets.find(query).sort("created_at", 1):
             s = PaperSet.from_mongo(d)
             have = {x.doc_type for x in s.docs}
@@ -262,6 +273,8 @@ async def classify_job(job_id: str):
             if s and (meta.doc_type == "question_paper" or not s.meta.subject):
                 await update_set_meta(s, meta)
         await set_fields(job_id, meta=meta.model_dump(), total_pages=n, set_id=job.set_id, status="waiting", error=None)
+    except BudgetExceeded as e:
+        await set_fields(job_id, status="paused", paused_from="queued", error=str(e))
     except Exception as e:
         logger.exception("Classify failed")
         await set_fields(job_id, status="error", error=f"Could not read document: {e}")
@@ -408,6 +421,8 @@ async def process_job(job_id: str):
         job.status, job.pages_done = "done", n
         renumber(job, s.base_name if s else set_base_name(job.meta, job.filename))
         await save_job(job)
+    except BudgetExceeded as e:
+        await set_fields(job_id, status="paused", paused_from="ready", pages_done=0, error=str(e))
     except Exception as e:
         logger.exception("Job failed")
         await set_fields(job_id, status="error", error=str(e))
@@ -423,11 +438,30 @@ async def claim_next():
     return None, None
 
 
+async def resume_paused():
+    """Put budget-paused jobs back in the queue when the limit allows another call."""
+    from llm import reserve, resolve, ai_settings
+    if not await db.jobs.find_one({"status": "paused", "is_deleted": False}, {"_id": 1}):
+        return
+    try:
+        held = await reserve(resolve(await ai_settings()))
+    except BudgetExceeded:
+        return
+    from llm import _reserved
+    _reserved["usd"] = max(0.0, _reserved["usd"] - held)
+    for st in ("queued", "ready"):
+        await db.jobs.update_many({"status": "paused", "paused_from": st, "is_deleted": False}, {"$set": {"status": st, "error": None}})
+
+
 async def worker_loop():
+    idle = 0
     while True:
         try:
             job_id, stage = await claim_next()
             if not job_id:
+                idle += 1
+                if idle % 30 == 0:
+                    await resume_paused()
                 await asyncio.sleep(2)
                 continue
             job = await load_job(job_id)

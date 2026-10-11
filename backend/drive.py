@@ -250,9 +250,11 @@ def paper_folder(meta, root: List[str]) -> List[str]:
     key = next((k for k, al in SUBJECT_ALIASES.items() if subj.lower() in al), None)
     if key == "physical-sciences" and meta.grade in ("7", "8", "9"):
         key = "natural-sciences"
-    return [*root, meta.year or "Unknown Year", f"Grade {meta.grade}" if meta.grade else "Unknown Grade",
-            SUBJECT_FOLDERS.get(key, subj or "Unknown Subject"), SESSION_FOLDERS.get(meta.session, "Misc"),
-            PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
+    base = [*root, meta.year or "Unknown Year", f"Grade {meta.grade}" if meta.grade else "Unknown Grade",
+            SUBJECT_FOLDERS.get(key, subj or "Unknown Subject")]
+    if getattr(meta, "school", ""):
+        return base + ["Misc", meta.school.strip()]
+    return base + [SESSION_FOLDERS.get(meta.session, "Misc"), PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
 
 
 def plan_base(s: PaperSet, jobs, root: List[str]) -> List[str]:
@@ -277,8 +279,7 @@ def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
         return out
     qroot = base + ["Questions", f"Paper_{n}"]
     for q in qp.questions:
-        main = norm_label(q.label).split(".")[0] or q.label
-        qdir = qroot + [f"Question_{main}"]
+        qdir = qroot + [f"Question_{norm_label(q.label) or q.label}"]
         out.append({"path": qdir + ["Question"], "name": q.filename, "storage": q.storage_path, "mime": "image/png", "replace": True})
         link = info["links"][q.id]
         refs = ([("Memo", link["memo"])] if link["memo"] else []) + [("Addendum", r) for r in link["addenda"]] + [("Errata", r) for r in link["errata"]]

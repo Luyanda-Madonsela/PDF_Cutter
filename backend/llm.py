@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from datetime import datetime, timezone, timedelta
 import io
@@ -42,7 +43,67 @@ def _mime(b64: str) -> str:
     return "image/jpeg" if b64.startswith("/9j/") else "image/webp" if b64.startswith("UklG") else "image/png"
 
 
+class BudgetExceeded(Exception):
+    pass
+
+
+EST_TOKENS = (4000, 1500)  # assumed tokens for one page when a model has no history yet
+_budget_lock = asyncio.Lock()
+_reserved = {"usd": 0.0}
+
+
+async def budget() -> dict:
+    doc = await db.settings.find_one({"_id": "ai_budget"}) or {}
+    return {"monthly_limit": doc.get("monthly_limit")}
+
+
+async def month_spend(table: dict) -> tuple:
+    """(estimated USD spent this month, models used without a price)."""
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    spent, unpriced = 0.0, set()
+    async for r in db.ai_usage.find({"day": {"$regex": f"^{month}"}}):
+        p = table.get(r["model"])
+        if not p:
+            unpriced.add(r["model"])
+            continue
+        spent += r.get("input_tokens", 0) / 1e6 * p[0] + r.get("output_tokens", 0) / 1e6 * p[1]
+    return spent, unpriced
+
+
+async def next_call_cost(model: str, p) -> float:
+    rows = await db.ai_usage.find({"model": model}).sort("day", -1).limit(30).to_list(30)
+    calls = sum(r.get("calls", 0) for r in rows)
+    tin, tout = (sum(r.get("input_tokens", 0) for r in rows) / calls, sum(r.get("output_tokens", 0) for r in rows) / calls) if calls else EST_TOKENS
+    return (max(tin, 1000) / 1e6 * p[0] + max(tout, 500) / 1e6 * p[1]) * 1.5  # 50% safety margin
+
+
+async def reserve(cfg: dict) -> float:
+    """Reserve the cost of one call, or raise BudgetExceeded if it could pass the monthly limit."""
+    limit = (await budget())["monthly_limit"]
+    if limit is None:
+        return 0.0
+    table = await prices()
+    p = table.get(cfg["model"])
+    if not p:
+        raise BudgetExceeded(f"Spending limit is on but {cfg['model']} has no price set. Set its price in AI settings, Usage & cost")
+    async with _budget_lock:
+        spent, _ = await month_spend(table)
+        cost = await next_call_cost(cfg["model"], p)
+        if spent + _reserved["usd"] + cost > limit:
+            raise BudgetExceeded(f"Monthly AI spending limit of ${limit:.2f} reached (spent about ${spent:.2f}). Processing is paused")
+        _reserved["usd"] += cost
+        return cost
+
+
 async def complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> str:
+    held = await reserve(cfg)
+    try:
+        return await _complete(cfg, prompt, img_b64, session_id)
+    finally:
+        _reserved["usd"] = max(0.0, _reserved["usd"] - held)
+
+
+async def _complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> str:
     if cfg["provider"] in NATIVE or cfg["provider"] == "emergent":
         vendor = "gemini" if cfg["provider"] == "emergent" else cfg["provider"]
         chat = LlmChat(api_key=cfg["key"], session_id=session_id, system_message=SYSTEM).with_model(vendor, cfg["model"])
@@ -182,3 +243,31 @@ async def set_price(body: PriceIn):
         raise HTTPException(400, "Prices must be zero or more")
     await db.ai_prices.update_one({"_id": body.model.strip()}, {"$set": {"price": [body.input, body.output]}}, upsert=True)
     return await usage()
+
+
+class BudgetIn(BaseModel):
+    monthly_limit: Optional[float] = None
+
+
+async def budget_status() -> dict:
+    table = await prices()
+    spent, unpriced = await month_spend(table)
+    limit = (await budget())["monthly_limit"]
+    paused = await db.jobs.count_documents({"status": "paused", "is_deleted": False})
+    return {"monthly_limit": limit, "spent": round(spent, 4), "unpriced_models": sorted(unpriced), "paused_jobs": paused,
+            "month": datetime.now(timezone.utc).strftime("%Y-%m"), "reached": limit is not None and spent >= limit}
+
+
+@ai_api.get("/budget")
+async def get_budget():
+    return await budget_status()
+
+
+@ai_api.put("/budget")
+async def set_budget(body: BudgetIn):
+    if body.monthly_limit is not None and body.monthly_limit < 0:
+        raise HTTPException(400, "Limit must be zero or more")
+    await db.settings.update_one({"_id": "ai_budget"}, {"$set": {"monthly_limit": body.monthly_limit}}, upsert=True)
+    from jobs import resume_paused  # lazy: jobs imports ai which imports this module
+    await resume_paused()
+    return await budget_status()
