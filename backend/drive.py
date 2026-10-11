@@ -99,10 +99,13 @@ async def callback(code: Optional[str] = Query(None), state: str = Query(...), e
     except Exception as e:
         logger.error(f"Drive OAuth failed: {e}")
         return RedirectResponse(f"{front}/?drive=error")
-    if not set(SCOPES).issubset(set(c.scopes or [])):
+    granted = flow.oauth2session.token.get("scope") or []
+    granted = granted.split() if isinstance(granted, str) else list(granted)
+    if not set(SCOPES).issubset(granted):
+        logger.warning(f"Drive OAuth missing scope, granted: {granted}")
         return RedirectResponse(f"{front}/?drive=scope")
     await db.drive_credentials.update_one({"_id": CRED_ID}, {"$set": {
-        "access_token": c.token, "refresh_token": c.refresh_token, "token_uri": c.token_uri, "scopes": list(c.scopes or []),
+        "access_token": c.token, "refresh_token": c.refresh_token, "token_uri": c.token_uri, "scopes": granted,
         "expiry": c.expiry.replace(tzinfo=timezone.utc).isoformat() if c.expiry else None,
         "connected_by": st["user_email"], "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
     return RedirectResponse(f"{front}/?drive=connected")
