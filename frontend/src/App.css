@@ -1,0 +1,76 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --pc-bg: #0B0F19;
+  --pc-surface: #111827;
+  --pc-surface2: #1F293D;
+  --pc-border: #263042;
+  --pc-text: #F9FAFB;
+  --pc-text2: #9CA3AF;
+  --pc-muted: #6B7280;
+  --pc-amber: #F59E0B;
+  --pc-emerald: #10B981;
+}
+
+.font-heading { font-family: 'Cabinet Grotesk', 'Outfit', sans-serif; }
+.font-body { font-family: 'IBM Plex Sans', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', monospace; }
+
+::selection { background: var(--pc-amber); color: #0B0F19; }
+
+.pc-grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.pc-card {
+  background: var(--pc-surface);
+  border: 1px solid var(--pc-border);
+  border-radius: 12px;
+}
+
+.pc-overline {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--pc-amber);
+  font-weight: 500;
+}
+
+.pc-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--pc-amber);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.pc-btn-primary, .pc-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: background-color 150ms, transform 150ms, opacity 150ms;
+}
+.pc-btn-primary { background: var(--pc-amber); color: #0B0F19; }
+.pc-btn-primary:hover { background: #FBBF24; }
+.pc-btn-secondary { background: var(--pc-surface2); color: var(--pc-text); border: 1px solid var(--pc-border); }
+.pc-btn-secondary:hover { background: #2A3650; }
+.pc-btn-primary:active, .pc-btn-secondary:active { transform: scale(0.97); }
+.pc-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.pc-progress-indicator, [role="progressbar"] > div { background: var(--pc-amber) !important; }
+
+@keyframes pc-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.pc-rise { animation: pc-rise 450ms cubic-bezier(.2,.7,.2,1) both; }

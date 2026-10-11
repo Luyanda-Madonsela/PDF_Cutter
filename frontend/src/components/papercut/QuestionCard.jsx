@@ -1,0 +1,28 @@
+import { Layers } from "lucide-react";
+import { imageUrl } from "@/lib/api";
+
+export const QuestionCard = ({ jobId, q, onOpen, index }) => (
+  <button
+    data-testid={`question-card-${q.order}`}
+    onClick={() => onOpen(q)}
+    style={{ animationDelay: `${Math.min(index, 20) * 30}ms` }}
+    className="pc-card pc-rise group text-left overflow-hidden hover:border-[var(--pc-amber)] transition-colors duration-200"
+  >
+    <div className="h-48 bg-white overflow-hidden">
+      <img
+        data-testid={`question-image-${q.order}`}
+        src={imageUrl(jobId, q.filename)}
+        alt={`Question ${q.label}`}
+        loading="lazy"
+        className="w-full object-cover object-top group-hover:scale-[1.02] transition-transform duration-300"
+      />
+    </div>
+    <div className="p-3 flex items-center justify-between gap-2 border-t border-[var(--pc-border)]">
+      <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
+      <span className="font-mono text-[11px] text-[var(--pc-muted)] flex items-center gap-1">
+        {q.pages.length > 1 && <Layers className="h-3 w-3 text-[var(--pc-amber)]" />}
+        p.{q.pages.join("–")}
+      </span>
+    </div>
+  </button>
+);

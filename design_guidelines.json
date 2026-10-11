@@ -1,0 +1,109 @@
+{
+  "project_name": "ExamCrop AI - High School Past Paper Question Splitter",
+  "design_archetype": "Swiss Technical Precision & Tactical Utility",
+  "theme": {
+    "default_mode": "dark",
+    "toggle_supported": true,
+    "dark_palette": {
+      "background": "#0B0F19",
+      "surface": "#111827",
+      "surface_elevated": "#1F293D",
+      "border": "#374151",
+      "border_subtle": "#1F2937",
+      "text_primary": "#F9FAFB",
+      "text_secondary": "#9CA3AF",
+      "text_muted": "#6B7280",
+      "primary": "#3B82F6",
+      "primary_hover": "#2563EB",
+      "accent_amber": "#F59E0B",
+      "accent_emerald": "#10B981",
+      "accent_indigo": "#6366F1"
+    },
+    "light_palette": {
+      "background": "#F8FAFC",
+      "surface": "#FFFFFF",
+      "surface_elevated": "#F1F5F9",
+      "border": "#E2E8F0",
+      "border_subtle": "#F1F5F9",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#94A3B8",
+      "primary": "#2563EB",
+      "primary_hover": "#1D4ED8",
+      "accent_amber": "#D97706",
+      "accent_emerald": "#059669",
+      "accent_indigo": "#4F46E5"
+    }
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk, Outfit, sans-serif",
+    "body_font": "IBM Plex Sans, DM Sans, sans-serif",
+    "mono_font": "JetBrains Mono, monospace",
+    "hierarchy": {
+      "h1_hero": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight",
+      "h2_section": "text-xl sm:text-2xl font-bold tracking-tight",
+      "h3_card": "text-lg font-semibold tracking-normal",
+      "label_overline": "text-xs uppercase font-mono tracking-widest text-blue-500 dark:text-blue-400 font-semibold",
+      "body_base": "text-sm sm:text-base font-normal leading-relaxed",
+      "caption": "text-xs font-mono text-muted-foreground"
+    }
+  },
+  "layout_strategy": {
+    "app_container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8",
+    "hero_dropzone_grid": "grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch",
+    "dropzone_span": "lg:col-span-8",
+    "quick_stats_span": "lg:col-span-4",
+    "results_grid": "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6",
+    "sidebar_history_layout": "grid grid-cols-1 lg:grid-cols-12 gap-8"
+  },
+  "key_components": {
+    "header": {
+      "description": "Sticky top bar with micro-blur backdrop, SA flag high school badge, live AI status indicator, theme toggle, and testid attributes.",
+      "data_testids": ["app-header", "app-logo", "theme-toggle-btn", "ai-model-badge"]
+    },
+    "pdf_dropzone": {
+      "description": "Interactive drag-and-drop zone with visual pulsing ring, file size validation, South Africa Past Paper grade selection (Grade 10, 11, 12 / NSC / IEB), subject selector (Maths, Physics, Life Sciences, Accounting), and processing trigger button.",
+      "data_testids": ["pdf-dropzone-container", "file-input", "upload-cta-button", "subject-select", "grade-select"]
+    },
+    "processing_progress": {
+      "description": "Real-time AI slicing indicator with step breakdown (OCR analysis -> layout detection -> multi-page stitching -> sub-question detection 1.1, 1.2 -> crop execution). Shows progress bar, current page (Page X of Y), detected question count, and live log stream.",
+      "data_testids": ["processing-progress-card", "progress-bar", "current-page-indicator", "detected-questions-count", "cancel-processing-btn"]
+    },
+    "question_preview_card": {
+      "description": "Dense, crisp preview card for cropped question screenshot. Displays question label tag (e.g. 'Question 1.1'), page source tag ('Page 3'), dimension ratio, stitched multi-page indicator badge, full-size light-box trigger, and re-crop/download action.",
+      "data_testids": ["question-card-{id}", "question-label-{id}", "question-image-{id}", "zoom-question-btn-{id}", "download-single-btn-{id}"]
+    },
+    "zip_download_banner": {
+      "description": "High-visibility sticky bottom bar or top summary widget with ZIP file name input, total question count badge, file size estimate, 'Download Question Pack (.zip)' primary action, and export format options (PNG ZIP, PDF catalog).",
+      "data_testids": ["download-zip-banner", "zip-filename-input", "download-zip-button", "export-format-select"]
+    },
+    "past_history_drawer": {
+      "description": "Compact history list of past sliced PDFs with timestamp, subject tag, total questions cropped, and instant re-download ZIP action.",
+      "data_testids": ["history-section", "history-item-{id}", "history-redownload-btn-{id}"]
+    }
+  },
+  "design_rules": {
+    "glassmorphism": "backdrop-blur-md bg-white/80 dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800",
+    "button_primary": "px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition-all duration-150 active:scale-95 disabled:opacity-50",
+    "button_secondary": "px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 font-medium transition-all duration-150",
+    "badge_tag": "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+    "card_container": "rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden"
+  },
+  "icon_libraries": [
+    "lucide-react",
+    "@radix-ui/react-icons"
+  ],
+  "accessibility_and_testing": {
+    "data_testid_requirement": "EVERY interactive element (button, input, select, dropzone, card, badge) MUST include a kebab-case data-testid attribute.",
+    "color_contrast": "Ensure all text meets minimum 4.5:1 APCA contrast ratio. Sub-question labels and metadata rely on high contrast badge backgrounds.",
+    "focus_states": "All focusable elements must have focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+  },
+  "instructions_to_main_agent": [
+    "Build a sleek, high-utility Single Page SaaS Application for South African High School Past Paper PDF Question Splitting.",
+    "Ensure dark/light mode toggle works seamlessly with persistent preference.",
+    "Structure UI into logical sections: Header -> Dropzone/Subject Setup -> Processing Bar / AI Log -> Interactive Question Grid (with sub-question 1.1, 1.2 badges) -> ZIP Download Action & Export History.",
+    "Ensure image previews handle vertical scroll/zoom for tall multi-page stitched question images.",
+    "Add sample demo data / realistic past papers (e.g. NSC Grade 12 Mathematics P1 Nov 2024, Physical Sciences P2 2023) so user can test instant cropping without needing a live backend initially.",
+    "Ensure data-testid attributes are present on all buttons, dropzones, sliders, filters, inputs, and download links."
+  ]
+}
