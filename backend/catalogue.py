@@ -92,7 +92,7 @@ def parse_blocks(ws) -> List[dict]:
                 rows[ym.group(1)] = r
                 if is_grey(ws.cell(r, 2)):
                     grey.add(ym.group(1))
-        blocks.append({"title": title, "session": _title_session(title), "paper": m.group(1) if m else "", "variant": vm.group(1) if vm else "",
+        blocks.append({"title": title, "title_row": t, "session": _title_session(title), "paper": m.group(1) if m else "", "variant": vm.group(1) if vm else "",
                        "cols": cols, "errata_col": errata_col, "rows": rows, "grey": grey})
     return blocks
 
@@ -163,21 +163,29 @@ def _locate_intl(key, struct, q, meta) -> dict:
     return {**base, "found": True, "block": block["title"], "row": row, "row_label": f"{sheet} {meta.year}"}
 
 
-def topic_cells(questions: List[dict]) -> Dict[str, str]:
-    """questions: [{label, topic}] in order. Whole main question -> 'Qn' when all its parts share one topic."""
+def topic_cells(questions: List[dict], field: str = "topic") -> Dict[str, str]:
+    """questions: [{label, topic}] in order. Whole main question -> 'Qn' when all its parts share one value."""
     mains: Dict[str, List[dict]] = {}
     for q in questions:
         mains.setdefault(q["label"].split(".")[0], []).append(q)
     out: Dict[str, List[str]] = {}
     for main, qs in mains.items():
-        topics = {q.get("topic") for q in qs}
-        if len(topics) == 1 and None not in topics:
-            out.setdefault(qs[0]["topic"], []).append(f"Q{main}")
+        vals = {q.get(field) for q in qs}
+        if len(vals) == 1 and None not in vals:
+            out.setdefault(qs[0][field], []).append(f"Q{main}")
             continue
         for q in qs:
-            if q.get("topic"):
-                out.setdefault(q["topic"], []).append(f"Q{q['label']}")
+            if q.get(field):
+                out.setdefault(q[field], []).append(f"Q{q['label']}")
     return {t: ", ".join(v) for t, v in out.items()}
+
+
+DIFFICULTY_HEADER = "Difficulty"
+
+
+def difficulty_text(questions: List[dict]) -> Optional[str]:
+    cells = topic_cells(questions, "difficulty")
+    return "\n".join(f"{lvl}: {cells[lvl]}" for lvl in ("Easy", "Medium", "Hard") if lvl in cells) or None
 
 
 def _write(ws, r, c, value):
@@ -202,7 +210,7 @@ def write_school_sheet(wb, key: str, entries: List[dict]):
     for paper in papers:
         tb = next((b for b in struct.get("DBE", []) if (b["paper"] or "1") == paper), None)
         topics = [n for _, n in tb["cols"]] if tb else []
-        cols = ["Year", "School", "Term", "Assessment", "Errata"] + topics
+        cols = ["Year", "School", "Term", "Assessment", "Errata"] + topics + [DIFFICULTY_HEADER]
         ws.cell(r, 2, f"SCHOOL TESTS (P{paper})").font = Font(bold=True, size=13)
         r += 1
         for i, name in enumerate(cols):
@@ -215,13 +223,28 @@ def write_school_sheet(wb, key: str, entries: List[dict]):
         for e in rows:
             m, cells = e["meta"], topic_cells(e["questions"])
             vals = [m.year, m.school, f"Term {m.term}" if m.term else "", m.assessment, ", ".join(f"Q{x}" for x in e["errata"]) or None]
-            for i, v in enumerate(vals + [cells.get(t) for t in topics]):
+            for i, v in enumerate(vals + [cells.get(t) for t in topics] + [difficulty_text(e["questions"])]):
                 ws.cell(r, 2 + i, v)
             r += 1
         if not rows:
             ws.cell(r, 2, "No school tests yet").font = Font(italic=True, color="FF7F7F7F")
             r += 1
         r += 2
+
+
+def write_difficulty(ws, block: dict, row: int, text: Optional[str]):
+    """Extra column right of the block's last column, headed 'Difficulty'."""
+    from openpyxl.styles import Alignment
+    col = max([c for c, _ in block["cols"]] + [block["errata_col"] or 0]) + 1
+    head = ws.cell(block["title_row"] + 1, col)
+    if not isinstance(head, MergedCell) and head.value in (None, DIFFICULTY_HEADER):
+        head.value = DIFFICULTY_HEADER
+        ref = ws.cell(block["title_row"] + 1, col - 1)
+        head.font, head.fill, head.border, head.alignment = ref.font.copy(), ref.fill.copy(), ref.border.copy(), ref.alignment.copy()
+        ws.column_dimensions[head.column_letter].width = max(ws.column_dimensions[head.column_letter].width or 0, 28)
+    cell = ws.cell(row, col)
+    if not isinstance(cell, MergedCell):
+        cell.value, cell.alignment = text, Alignment(wrap_text=True, vertical="top")
 
 
 def build_workbook(key: str, entries: List[dict]) -> bytes:
@@ -239,6 +262,7 @@ def build_workbook(key: str, entries: List[dict]) -> bytes:
             _write(ws, loc["row"], c, cells.get(name))
         if block["errata_col"]:
             _write(ws, loc["row"], block["errata_col"], ", ".join(f"Q{x}" for x in e["errata"]) or None)
+        write_difficulty(ws, block, loc["row"], difficulty_text(e["questions"]))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

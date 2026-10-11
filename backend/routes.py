@@ -11,7 +11,8 @@ from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TY
 from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
-                  erase_proposals, ERASE_FLAG, match_topic, stop_job)
+                  erase_proposals, ERASE_FLAG, DIFF_FLAG, match_topic, stop_job, rate_set, hardest, RATING)
+from ai import LEVELS
 from syllabus import rename
 
 api = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
@@ -153,6 +154,19 @@ async def recrop_set(set_id: str):
     return await set_detail(await load_set(set_id))
 
 
+@api.post("/sets/{set_id}/rate-difficulty")
+async def rate_set_difficulty(set_id: str):
+    s = await set_or_404(set_id)
+    qp = next((j for j in await set_jobs(set_id) if j.meta.doc_type == "question_paper" and j.status == "done" and j.questions), None)
+    if not qp:
+        raise HTTPException(400, "This set has no finished question paper to rate")
+    if set_id in RATING:
+        raise HTTPException(400, "Difficulty rating is already running for this set")
+    await db.sets.update_one({"_id": set_id}, {"$set": {"rating": {"status": "running", "done": 0, "total": len(qp.questions), "error": None}}})
+    RATING[set_id] = asyncio.create_task(rate_set(set_id, qp.id))
+    return await set_detail(await load_set(set_id))
+
+
 @api.get("/sets/{set_id}")
 async def get_set(set_id: str):
     return await set_detail(await set_or_404(set_id))
@@ -225,7 +239,7 @@ async def catalogue_entries() -> dict:
             continue
         errata = sorted({norm_label(q.label) for j in jobs if j.meta.doc_type == "errata" for q in j.questions if norm_label(q.label)[:1].isdigit()},
                         key=lambda x: [int(p) for p in x.split(".")])
-        out[key].append({"meta": s.meta, "questions": [{"label": norm_label(q.label), "topic": q.topic} for q in qp.questions], "errata": errata})
+        out[key].append({"meta": s.meta, "questions": [{"label": norm_label(q.label), "topic": q.topic, "difficulty": q.difficulty} for q in qp.questions], "errata": errata})
     return out
 
 
@@ -363,6 +377,11 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
     if body.topic is not None:
         q.topic = body.topic or None
         q.flags = [f for f in q.flags if f != "Topic not set"]
+    if body.difficulty is not None:
+        if body.difficulty and body.difficulty not in LEVELS:
+            raise HTTPException(400, "Difficulty must be Easy, Medium or Hard")
+        q.difficulty = body.difficulty or None
+        q.flags = [f for f in q.flags if f != DIFF_FLAG]
     if body.parts is not None:
         if not body.parts:
             raise HTTPException(400, "At least one crop region required")
@@ -371,7 +390,7 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
                 raise HTTPException(400, "Invalid crop region")
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                    q.erase_applied, q.erase_status, q.erase_manual, q.crop_history + [q.parts])
+                                                    q.erase_applied, q.erase_status, q.erase_manual, q.crop_history + [q.parts], q.difficulty)
         doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -386,7 +405,7 @@ async def undo_crop(job_id: str, qid: str):
         raise HTTPException(400, "No earlier crop to go back to")
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.crop_history[-1], q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                q.erase_applied, q.erase_status, q.erase_manual, q.crop_history[:-1])
+                                                q.erase_applied, q.erase_status, q.erase_manual, q.crop_history[:-1], q.difficulty)
     doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -421,7 +440,7 @@ async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]], manual: L
     chosen = [b for b in boxes if b in allowed] + [b for b in manual if b not in allowed]
     flags = [f for f in q.flags if f != ERASE_FLAG]
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.parts, q.marks, flags, q.id, q.reviewed, q.topic,
-                                                chosen, "applied" if chosen else "rejected", manual, q.crop_history)
+                                                chosen, "applied" if chosen else "rejected", manual, q.crop_history, q.difficulty)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/erase")
@@ -498,7 +517,7 @@ async def merge_at(job: Job, idx: int):
     status = "pending" if "pending" in (a.erase_status, b.erase_status) else a.erase_status if a.erase_status != "none" else b.erase_status
     job.questions[idx] = await rebuild_question(job, doc, a.label, parts, sum_marks([a.marks, b.marks]), flags, a.id, topic=a.topic or b.topic,
                                                 erase_applied=a.erase_applied + b.erase_applied, erase_status=status,
-                                                erase_manual=a.erase_manual + b.erase_manual)
+                                                erase_manual=a.erase_manual + b.erase_manual, difficulty=hardest([a.difficulty, b.difficulty]))
     doc.close()
     del job.questions[idx + 1]
 

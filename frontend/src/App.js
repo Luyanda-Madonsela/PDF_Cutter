@@ -31,7 +31,7 @@ function App() {
     return () => clearInterval(t);
   }, [queueActive, refresh]);
 
-  const setActive = set && (set.documents.some((d) => ACTIVE_DOC.includes(d.status) && d.status !== "waiting") || driveBusy(set));
+  const setActive = set && (set.documents.some((d) => ACTIVE_DOC.includes(d.status) && d.status !== "waiting") || driveBusy(set) || set.rating?.status === "running");
   useEffect(() => {
     if (!setActive) return;
     const t = setInterval(() => getSet(set.id).then(setSet).catch(() => {}), 2500);

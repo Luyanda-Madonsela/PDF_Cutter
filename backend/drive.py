@@ -189,6 +189,10 @@ def _retry(req):
             raise
 
 
+def image_stem(name: str) -> str:
+    return re.sub(r"(_\d+marks)?(_(Easy|Medium|Hard))?\.png$", "", name)
+
+
 class DriveWriter:
     def __init__(self, svc, root: List[str]):
         self.svc, self.cache, self.root = svc, {}, root
@@ -205,6 +209,13 @@ class DriveWriter:
                 continue
             return f["id"]
         return None
+
+    def _renamed(self, parent: str, name: str):
+        """Same question image under an older name (marks / difficulty changed): update it instead of adding a copy."""
+        stem = image_stem(name)
+        res = _retry(self.svc.files().list(q=f"name contains '{_q(stem)}' and '{parent}' in parents and trashed=false and mimeType!='{FOLDER}'",
+                                           fields="files(id,name)", pageSize=20, supportsAllDrives=True, includeItemsFromAllDrives=True))
+        return next((f["id"] for f in res.get("files", []) if image_stem(f["name"]) == stem), None)
 
     def folder(self, path: List[str], create_root: bool = False) -> str:
         parent, walked = "root", []
@@ -237,9 +248,11 @@ class DriveWriter:
         existing = self._find(parent, name, False)
         if existing and not replace:
             return False
+        renamed = None if existing or not replace else self._renamed(parent, name)
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime, resumable=False)
-        if existing:
-            _retry(self.svc.files().update(fileId=existing, media_body=media, supportsAllDrives=True))
+        if existing or renamed:
+            _retry(self.svc.files().update(fileId=existing or renamed, media_body=media, supportsAllDrives=True,
+                                           **({"body": {"name": name}} if renamed else {})))
         else:
             body = {"name": name, "parents": [parent], **({"appProperties": {"papercut": "1"}} if mime == "application/pdf" else {})}
             _retry(self.svc.files().create(body=body, media_body=media, fields="id", supportsAllDrives=True))

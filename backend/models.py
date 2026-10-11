@@ -39,6 +39,7 @@ class Question(BaseModel):
     pages: List[int] = []
     marks: Optional[int] = None
     topic: Optional[str] = None
+    difficulty: Optional[str] = None  # Easy | Medium | Hard
     erase_status: str = "none"  # none | pending | applied | rejected
     erase_applied: List[List[int]] = []  # approved boxes: [page, ymin, xmin, ymax, xmax]
     erase_manual: List[List[int]] = []  # subset of erase_applied drawn by the user
@@ -105,6 +106,7 @@ class PaperSet(BaseDocument):
     docs: List[DocSummary] = []
     flagged: int = 0
     question_count: int = 0
+    rating: Optional[dict] = None  # difficulty re-rating progress: {status, done, total, error}
     drive: Optional[dict] = None  # {status, uploaded, total, folder_url, error, at}
     is_deleted: bool = False
     created_at: str = Field(default_factory=now_iso)
@@ -121,3 +123,4 @@ class QuestionUpdate(BaseModel):
     marks: Optional[int] = None
     clear_marks: bool = False
     topic: Optional[str] = None
+    difficulty: Optional[str] = None  # "" clears it

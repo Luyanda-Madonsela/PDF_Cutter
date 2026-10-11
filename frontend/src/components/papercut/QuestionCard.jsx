@@ -1,5 +1,5 @@
 import { Layers, BookCheck, Flag, Paperclip, FileWarning, Eraser } from "lucide-react";
-import { imageUrl } from "@/lib/api";
+import { imageUrl, DIFFICULTY } from "@/lib/api";
 
 export const QuestionCard = ({ jobId, q, onOpen, index, link }) => (
   <button
@@ -17,6 +17,7 @@ export const QuestionCard = ({ jobId, q, onOpen, index, link }) => (
       <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap">
         <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
         {q.marks != null && <span data-testid={`question-marks-${q.order}`} className="font-mono text-[11px] text-[var(--pc-text2)]">{q.marks}m</span>}
+        {DIFFICULTY[q.difficulty] && <span data-testid={`question-difficulty-${q.order}`} className={`px-1.5 py-0.5 rounded border font-mono text-[10px] ${DIFFICULTY[q.difficulty][1]}`}>{DIFFICULTY[q.difficulty][0]}</span>}
       </span>
       <span className="font-mono text-[11px] text-[var(--pc-muted)] flex items-center gap-1.5">
         {link?.flags?.length > 0 && <Flag data-testid={`question-flag-${q.order}`} className="h-3.5 w-3.5 text-[var(--pc-amber)]" />}

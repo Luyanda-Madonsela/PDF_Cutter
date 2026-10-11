@@ -8,7 +8,7 @@ import pymupdf
 from core import db, logger, put_object, get_object, APP_NAME
 from models import Job, JobMeta, Question, Part, PaperSet, DocSummary
 from llm import BudgetExceeded
-from ai import detect_segments, detect_meta
+from ai import detect_segments, detect_meta, rate_difficulty, LEVELS
 from catalogue import locate
 from imaging import page_jpeg, crop_parts, finalize, x_bounds, union_col, to_png
 
@@ -96,8 +96,33 @@ def renumber(job: Job, set_base: str):
         seen[lab] = seen.get(lab, 0) + 1
         dup = f"_{seen[lab]}" if seen[lab] > 1 else ""
         marks = f"_{q.marks}marks" if q.marks is not None and job.meta.doc_type in ("question_paper", "memo") else ""
+        diff = f"_{q.difficulty}" if q.difficulty else ""
         q.order = i
-        q.filename = f"{i:03d}_{job.base_name}_Q{lab}{dup}{marks}.png"
+        q.filename = f"{i:03d}_{job.base_name}_Q{lab}{dup}{marks}{diff}.png"
+
+
+def hardest(values):
+    vals = [v for v in values if v in LEVELS]
+    return max(vals, key=LEVELS.index) if vals else None
+
+
+async def sync_difficulty(jobs: List[Job], set_base: str):
+    """Memos, addenda and errata copy the difficulty of their matching question-paper question."""
+    qp = next((j for j in jobs if j.meta.doc_type == "question_paper" and j.status == "done"), None)
+    if not qp:
+        return
+    qn = [(norm_label(q.label), q.difficulty) for q in qp.questions]
+    for j in jobs:
+        if j.id == qp.id or j.status != "done":
+            continue
+        before = [(q.difficulty, q.filename) for q in j.questions]
+        for q in j.questions:
+            n = norm_label(q.label)
+            exact = [d for lab, d in qn if lab == n]
+            q.difficulty = hardest(exact) if exact else hardest([d for lab, d in qn if lab.startswith(n + ".") or n.startswith(lab + ".")])
+        renumber(j, set_base)
+        if [(q.difficulty, q.filename) for q in j.questions] != before:
+            await set_fields(j.id, questions=[q.model_dump() for q in j.questions], base_name=j.base_name)
 
 
 # ---------- persistence ----------
@@ -210,6 +235,8 @@ async def refresh_set(set_id: str):
             for j in jobs:
                 if j.id in waiting:
                     j.status = "ready"
+    if s.base_name:
+        await sync_difficulty(jobs, s.base_name)
     links = compute_links(jobs)
     qp = next((j for j in jobs if j.id == links["qp_id"]), None)
     docs = [DocSummary(job_id=j.id, doc_type=j.meta.doc_type, filename=j.filename, status=j.status,
@@ -304,13 +331,14 @@ def merge_groups(page_segs: list) -> list:
             if is_cont and groups:
                 g = groups[-1]
             elif not is_cont:
-                g = {"label": label, "parts": [], "marks": [], "flags": [], "topic": None}
+                g = {"label": label, "parts": [], "marks": [], "flags": [], "topic": None, "difficulty": None}
                 groups.append(g)
             else:
                 continue
             g["parts"].append(part)
             g["marks"].append(s.get("marks"))
             g["topic"] = g["topic"] or s.get("topic")
+            g["difficulty"] = g["difficulty"] or s.get("difficulty")
             if s.get("review"):
                 g["flags"].append(s["review"])
     return groups
@@ -327,13 +355,14 @@ def match_topic(topic, topics):
     return next((t for t in topics if t.lower() == topic.lower()), None) or next((t for t in topics if topic.lower() in t.lower() or t.lower() in topic.lower()), None)
 
 
-async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None, topic=None) -> Question:
+async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None, topic=None, difficulty=None) -> Question:
     path = await put_object(f"{APP_NAME}/jobs/{job_id}/{uuid.uuid4()}.png", to_png(img), "image/png")
-    return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts, marks=marks, flags=flags, topic=topic,
+    return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts, marks=marks, flags=flags, topic=topic, difficulty=difficulty,
                     pages=sorted({p.page + 1 for p in parts}), width=img.width, height=img.height)
 
 
 ERASE_FLAG = "Erase pending approval"
+DIFF_FLAG = "Difficulty not set"
 
 
 def erase_proposals(job: Job, parts) -> List[List[int]]:
@@ -357,13 +386,13 @@ CROP_HISTORY = 20
 
 
 async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False, topic=None,
-                           erase_applied=None, erase_status: str = "none", erase_manual=None, crop_history=None) -> Question:
+                           erase_applied=None, erase_status: str = "none", erase_manual=None, crop_history=None, difficulty=None) -> Question:
     applied = erase_applied or []
     crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count))
     col = job.content_col or None
     for c in crops:
         col = union_col(col, x_bounds(c))
-    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic)
+    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic, difficulty)
     q.reviewed, q.erase_applied, q.erase_status = reviewed, applied, erase_status
     q.erase_manual = [b for b in (erase_manual or []) if b in applied]
     q.crop_history = (crop_history or [])[-CROP_HISTORY:]
@@ -420,8 +449,11 @@ async def process_job(job_id: str):
             topic = match_topic(g["topic"], topics)
             if topics and not topic:
                 flags.append("Topic not set")
+            difficulty = g["difficulty"] if doc_type == "question_paper" else None
+            if doc_type == "question_paper" and not difficulty:
+                flags.append(DIFF_FLAG)
             img = await asyncio.to_thread(finalize, crops, col)
-            q = await upload_question(job_id, img, g["label"], g["parts"], marks, flags, topic=topic)
+            q = await upload_question(job_id, img, g["label"], g["parts"], marks, flags, topic=topic, difficulty=difficulty)
             if erase_proposals(Job(filename="", page_masks=page_masks), g["parts"]):
                 q.erase_status = "pending"
                 q.flags.append(ERASE_FLAG)
@@ -442,6 +474,55 @@ async def process_job(job_id: str):
         await set_fields(job_id, status="error", error=str(e))
     if job.set_id:
         await refresh_set(job.set_id)
+
+
+def rating_context(meta: JobMeta) -> str:
+    level = f"Grade {meta.grade}" if meta.grade else meta.qualification
+    return " ".join(b for b in [(meta.curriculum or "").upper() or "South African", level, meta.subject] if b)
+
+
+async def rate_set(set_id: str, job_id: str):
+    """Ask the AI for the difficulty of every question image in an already-processed question paper."""
+    try:
+        await _rate_set(set_id, job_id)
+    except Exception as e:
+        logger.exception("Difficulty rating failed")
+        await db.sets.update_one({"_id": set_id}, {"$set": {"rating.status": "error", "rating.error": str(e)}})
+    finally:
+        RATING.pop(set_id, None)
+
+
+RATING: dict = {}
+
+
+async def _rate_set(set_id: str, job_id: str):
+    job, s = await load_job(job_id), await load_set(set_id)
+    sem, done = asyncio.Semaphore(CONCURRENCY), {"n": 0}
+
+    async def one(q):
+        async with sem:
+            img = base64.b64encode(await get_object(q.storage_path)).decode()
+            d = await rate_difficulty(img, f"{job_id}-rate-{q.id}", rating_context(s.meta))
+            done["n"] += 1
+            await db.sets.update_one({"_id": set_id}, {"$set": {"rating.done": done["n"]}})
+            return q.id, d
+
+    results = await asyncio.gather(*[one(q) for q in job.questions], return_exceptions=True)
+    rated = dict(r for r in results if isinstance(r, tuple) and r[1])
+    errors = [r for r in results if isinstance(r, BaseException)]
+    job = await load_job(job_id)
+    for q in job.questions:
+        if q.id in rated:
+            q.difficulty = rated[q.id]
+            q.flags = [f for f in q.flags if f != DIFF_FLAG]
+    renumber(job, s.base_name)
+    await save_job(job)
+    err = None
+    if errors:
+        err = str(errors[0]) if isinstance(errors[0], BudgetExceeded) else f"{len(errors)} question(s) could not be rated: {errors[0]}"
+    await db.sets.update_one({"_id": set_id}, {"$set": {"drive": None, "rating": {
+        "status": "error" if errors else "done", "done": len(rated), "total": len(job.questions), "error": err}}})
+    await refresh_set(set_id)
 
 
 async def claim_next():

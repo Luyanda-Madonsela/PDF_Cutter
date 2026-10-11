@@ -124,8 +124,34 @@ TOPIC_RULE = """
 - "topic": add this field to every segment: the curriculum topic of that sub-question, EXACTLY one of: {topics}. Pick the closest match."""
 
 
+DIFFICULTY_SCALE = """"Easy" = recall or a routine one-step procedure; "Medium" = a routine multi-step procedure or familiar application; "Hard" = complex or non-routine problem solving, proofs, multi-concept reasoning or unfamiliar contexts. Judge for a typical learner at this grade/level and consider the marks allocated."""
+DIFFICULTY_RULE = """
+- "difficulty": add this field to every segment: exactly one of "Easy", "Medium", "Hard". """ + DIFFICULTY_SCALE
+RATE_PROMPT = """This image is ONE question from a {context} exam question paper.
+Rate its difficulty: """ + DIFFICULTY_SCALE + """
+Respond with ONLY JSON, no markdown: {{"difficulty":"Medium"}}"""
+LEVELS = ("Easy", "Medium", "Hard")
+
+
+def norm_difficulty(v):
+    low = str(v or "").strip().lower()
+    if low.startswith(("easy", "beginner")):
+        return "Easy"
+    if low.startswith(("med", "moderate", "intermediate")):
+        return "Medium"
+    if low.startswith(("hard", "difficult", "challeng")):
+        return "Hard"
+    return None
+
+
+async def rate_difficulty(img_b64: str, session_id: str, context: str):
+    return norm_difficulty((await ask_json(RATE_PROMPT.format(context=context), img_b64, session_id)).get("difficulty"))
+
+
 async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=None):
     prompt = PROMPTS.get(doc_type, QP_PROMPT)
+    if doc_type == "question_paper":
+        prompt += DIFFICULTY_RULE
     if topics:
         prompt += TOPIC_RULE.format(topics=json.dumps(topics))
     data = await ask_json(prompt, img_b64, session_id)
@@ -137,7 +163,8 @@ async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=N
             review = s.get("review")
             out.append({"label": str(s.get("label", "CONTINUED")).strip(), "y0": y0, "y1": y1,
                         "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None,
-                        "topic": str(s["topic"]).strip() if s.get("topic") else None})
+                        "topic": str(s["topic"]).strip() if s.get("topic") else None,
+                        "difficulty": norm_difficulty(s.get("difficulty"))})
     excl = [[max(0, min(1000, int(v))) for v in b] for b in data.get("exclude", []) if isinstance(b, list) and len(b) == 4]
     bands = [(int(b[0]), int(b[1])) for b in data.get("answer_spaces", []) if isinstance(b, list) and len(b) == 2 and int(b[1]) > int(b[0])]
     return cut_bands(sorted(out, key=lambda s: s["y0"]), bands), excl

@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
 import { LinkedList } from "./LinkedEditor";
-import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop } from "@/lib/api";
+import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop, DIFFICULTY } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const ImgBox = ({ src, alt }) => (
@@ -27,11 +27,12 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
   const [label, setLabel] = useState("");
   const [marks, setMarks] = useState("");
   const [topic, setTopic] = useState("");
+  const [difficulty, setDifficulty] = useState("");
   const [tab, setTab] = useState("question");
-  useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); setTopic(q?.topic || ""); }, [q?.label, q?.marks, q?.topic]);
+  useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); setTopic(q?.topic || ""); setDifficulty(q?.difficulty || ""); }, [q?.label, q?.marks, q?.topic, q?.difficulty]);
   const isQp = doc?.meta.doc_type === "question_paper";
   useEffect(() => { setTab("question"); }, [qid]);
-  const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? "") || topic !== (q.topic || ""));
+  const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? "") || topic !== (q.topic || "") || difficulty !== (q.difficulty || ""));
   const flags = link ? link.flags : q && !q.reviewed ? q.flags : [];
 
   const act = async (fn, msg, close) => {
@@ -48,7 +49,7 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
             <div className="flex items-center justify-between gap-3 pr-8 flex-wrap">
               <div>
                 <DialogTitle className="font-heading text-xl">Q{q.label}</DialogTitle>
-                <DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}{q.marks != null ? ` · ${q.marks} marks` : ""}</DialogDescription>
+                <DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}{q.marks != null ? ` · ${q.marks} marks` : ""}{q.difficulty ? ` · ${DIFFICULTY[q.difficulty]?.[0] || q.difficulty}` : ""}</DialogDescription>
               </div>
               <a data-testid={PC.lightboxDownload} href={imageUrl(doc.id, q.id) + v} download={q.filename} className="pc-btn-secondary text-xs font-mono break-all"><Download className="h-4 w-4 shrink-0" /> {q.filename}</a>
             </div>
@@ -87,8 +88,15 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
                   {topics.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               )}
+              {isQp && (
+                <select data-testid="question-difficulty-select" value={difficulty} onChange={(e) => setDifficulty(e.target.value)}
+                  className="px-2 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] text-sm focus:outline-none focus:border-[var(--pc-amber)]">
+                  <option value="">No difficulty</option>
+                  {Object.entries(DIFFICULTY).map(([k, [name]]) => <option key={k} value={k}>{name}</option>)}
+                </select>
+              )}
               <button data-testid={PC.labelSave} disabled={!label.trim() || !dirty}
-                onClick={() => act(() => updateQuestion(doc.id, q.id, { label, topic, ...(marks === "" ? { clear_marks: true } : { marks: Number(marks) }) }), "Question updated")}
+                onClick={() => act(() => updateQuestion(doc.id, q.id, { label, topic, ...(isQp ? { difficulty } : {}), ...(marks === "" ? { clear_marks: true } : { marks: Number(marks) }) }), "Question updated")}
                 className="pc-btn-secondary text-sm disabled:opacity-40">Save</button>
               <div className="flex-1" />
               {idx < doc.questions.length - 1 && (
