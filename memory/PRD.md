@@ -117,3 +117,9 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - Manual edit in question dialog (difficulty select). "Difficulty not set" flag when AI omits it.
 - Excel: "Difficulty" column right of every filled block + School Tests sheet ("Easy: Q1, Q2.1\nMedium: ...").
 - Backlog: bulk "Rate all unrated sets" button; difficulty filter in set view.
+
+## 2026-06 — Whole-paper difficulty calibration
+- After cutting a QP, PDF text of every question (PyMuPDF clip per part) is sent in ONE text-only AI call (CALIBRATE_PROMPT, CAPS cognitive levels, target ~20/40/40% of marks Easy/Medium/Hard). Falls back to per-segment/per-image rating for scans (<60% questions with text) or AI failure.
+- llm.complete supports img_b64=None (text-only).
+- "Re-rate all difficulty" button (QueuePanel) -> POST/GET /api/sets/rate-difficulty-all; replaces ALL ratings incl. manual (user choice). Ran once on 2026-06 for both finished sets.
+- Test result: IEB PhysSci 2023 P2 went from 0% Hard to 41% Hard by marks. Drive files renamed in place (verified).

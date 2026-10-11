@@ -124,12 +124,22 @@ TOPIC_RULE = """
 - "topic": add this field to every segment: the curriculum topic of that sub-question, EXACTLY one of: {topics}. Pick the closest match."""
 
 
-DIFFICULTY_SCALE = """"Easy" = recall or a routine one-step procedure; "Medium" = a routine multi-step procedure or familiar application; "Hard" = complex or non-routine problem solving, proofs, multi-concept reasoning or unfamiliar contexts. Judge for a typical learner at this grade/level and consider the marks allocated."""
+DIFFICULTY_SCALE = """Use the exam cognitive levels: "Easy" = knowledge: recall of facts, definitions or formulas, recognition, one-step calculations; "Medium" = routine procedures: well-known multi-step methods and familiar applications practised in class; "Hard" = complex procedures and problem solving: non-routine or multi-concept reasoning, proofs, analysis/interpretation, unfamiliar contexts, questions most candidates struggle with. A well-set paper has roughly 40% of its marks at Hard, so do not default to Medium. More marks and later parts of a question usually mean higher demand."""
 DIFFICULTY_RULE = """
 - "difficulty": add this field to every segment: exactly one of "Easy", "Medium", "Hard". """ + DIFFICULTY_SCALE
 RATE_PROMPT = """This image is ONE question from a {context} exam question paper.
-Rate its difficulty: """ + DIFFICULTY_SCALE + """
+Rate its difficulty. """ + DIFFICULTY_SCALE + """
 Respond with ONLY JSON, no markdown: {{"difficulty":"Medium"}}"""
+CALIBRATE_PROMPT = """You are an experienced {context} examiner. Below is EVERY question of one exam question paper: number, marks, topic and printed text (diagrams are not shown).
+Rate each question's cognitive demand:
+- "Easy" = knowledge: recall of facts, definitions or formulas, straight recognition, one-step calculations.
+- "Medium" = routine procedures: well-known multi-step methods and familiar applications practised in class.
+- "Hard" = complex procedures and problem solving: non-routine or multi-concept reasoning, proofs, analysis/interpretation, unfamiliar contexts, questions most candidates would struggle with.
+Calibrate across the WHOLE paper, comparing questions with each other. A well-set paper (CAPS cognitive-level weighting) puts roughly 20% of its MARKS at Easy, 40% at Medium and 40% at Hard. Before answering, add up the marks per level; unless the paper is clearly unbalanced, each share should land within about 10 percentage points of these targets. Do not cluster everything at Medium: in most papers the multi-step calculations, explanations, analysis and final parts of questions are Hard. Later sub-questions of a main question are usually harder; more marks usually means more demand.
+Respond with ONLY JSON, no markdown, one entry for every n: {{"ratings":[{{"n":0,"difficulty":"Easy"}}]}}
+
+QUESTIONS:
+{items}"""
 LEVELS = ("Easy", "Medium", "Hard")
 
 
@@ -146,6 +156,18 @@ def norm_difficulty(v):
 
 async def rate_difficulty(img_b64: str, session_id: str, context: str):
     return norm_difficulty((await ask_json(RATE_PROMPT.format(context=context), img_b64, session_id)).get("difficulty"))
+
+
+async def calibrate_difficulty(context: str, items: list, session_id: str) -> dict:
+    """items: [{n, label, marks, topic, text}] -> {n: level} for the whole paper in one text-only call."""
+    lines = "\n".join(json.dumps(i, ensure_ascii=False) for i in items)
+    data = await ask_json(CALIBRATE_PROMPT.format(context=context, items=lines), None, session_id)
+    out = {}
+    for r in data.get("ratings", []):
+        d = norm_difficulty(r.get("difficulty")) if isinstance(r, dict) else None
+        if d and to_int(r.get("n")) is not None:
+            out[to_int(r["n"])] = d
+    return out
 
 
 async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=None):

@@ -108,7 +108,7 @@ async def _complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> st
         vendor = "gemini" if cfg["provider"] == "emergent" else cfg["provider"]
         chat = LlmChat(api_key=cfg["key"], session_id=session_id, system_message=SYSTEM).with_model(vendor, cfg["model"])
         text, usage = "", None
-        async for ev in chat.stream_message(UserMessage(text=prompt, file_contents=[ImageContent(image_base64=img_b64)])):
+        async for ev in chat.stream_message(UserMessage(text=prompt, file_contents=[ImageContent(image_base64=img_b64)] if img_b64 else None)):
             if isinstance(ev, TextDelta):
                 text += ev.content
             elif isinstance(ev, StreamDone):
@@ -121,8 +121,8 @@ async def _complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> st
     client = AsyncOpenAI(api_key=cfg["key"], base_url=cfg["base_url"], timeout=180)
     resp = await client.chat.completions.create(model=cfg["model"], messages=[
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": [{"type": "text", "text": prompt},
-                                     {"type": "image_url", "image_url": {"url": f"data:{_mime(img_b64)};base64,{img_b64}"}}]}])
+        {"role": "user", "content": [{"type": "text", "text": prompt}] + (
+            [{"type": "image_url", "image_url": {"url": f"data:{_mime(img_b64)};base64,{img_b64}"}}] if img_b64 else [])}])
     u = resp.usage
     await record_usage(cfg, u.prompt_tokens if u else 0, u.completion_tokens if u else 0)
     return resp.choices[0].message.content or ""

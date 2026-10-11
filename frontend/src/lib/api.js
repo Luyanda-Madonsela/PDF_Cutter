@@ -41,6 +41,8 @@ export const imageUrl = (jobId, qid) => `${API}/jobs/${jobId}/images/${qid}`;
 export const pageUrl = (jobId, page) => `${API}/jobs/${jobId}/pages/${page}`;
 
 export const rateDifficulty = (setId) => axios.post(`${API}/sets/${setId}/rate-difficulty`).then(data);
+export const rateAllStatus = () => axios.get(`${API}/sets/rate-difficulty-all`).then(data);
+export const rateAll = () => axios.post(`${API}/sets/rate-difficulty-all`).then(data);
 export const DIFFICULTY = { Easy: ["Easy/Beginner", "text-emerald-300 border-emerald-400/50"], Medium: ["Medium", "text-amber-300 border-amber-400/50"], Hard: ["Hard", "text-red-300 border-red-400/50"] };
 export const DOC_LABEL = { question_paper: "Question paper", memo: "Memo", addendum: "Addendum", errata: "Errata" };
 export const ACTIVE_DOC = ["queued", "classifying", "waiting", "ready", "processing"];

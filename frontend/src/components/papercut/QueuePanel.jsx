@@ -3,6 +3,7 @@ import { Download, Trash2, Flag } from "lucide-react";
 import { setZipUrl } from "@/lib/api";
 import { DriveBadge } from "./DriveSet";
 import { RecropAllButton } from "./Recrop";
+import { RateAllButton } from "./RateDifficulty";
 import { PC } from "@/constants/testIds";
 
 export const SET_STATUS = {
@@ -47,6 +48,7 @@ export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete, onRefre
     <aside data-testid={PC.historySection} className="pc-card p-5 pc-rise">
       <div className="pc-overline mb-3">Paper sets</div>
       {(counts.done || 0) > 0 && <RecropAllButton onDone={onRefresh} />}
+      {(counts.done || 0) > 0 && <RateAllButton />}
       <div data-testid={PC.queueCounts} className="grid grid-cols-5 gap-1 mb-4 font-mono text-center">
         {TILES.map(([k, l]) => (
           <div key={k} className="rounded bg-[var(--pc-surface2)] py-1.5">

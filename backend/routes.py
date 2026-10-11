@@ -11,7 +11,7 @@ from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TY
 from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
-                  erase_proposals, ERASE_FLAG, DIFF_FLAG, match_topic, stop_job, rate_set, hardest, RATING)
+                  erase_proposals, ERASE_FLAG, DIFF_FLAG, match_topic, stop_job, rate_set, hardest, RATING, BULK, rate_all)
 from ai import LEVELS
 from syllabus import rename
 
@@ -152,6 +152,21 @@ async def recrop_set(set_id: str):
         raise HTTPException(400, "Only finished paper sets with a question paper can be re-cropped")
     await recrop(*pair)
     return await set_detail(await load_set(set_id))
+
+
+@api.get("/sets/rate-difficulty-all")
+async def rate_all_status():
+    return BULK
+
+
+@api.post("/sets/rate-difficulty-all")
+async def rate_all_sets():
+    if BULK["status"] == "running":
+        raise HTTPException(400, "Difficulty rating is already running")
+    pairs = [(s.id, qp.id) for s, qp in await done_qp_jobs() if qp.questions]
+    BULK.update(status="running", done=0, total=len(pairs), error=None)
+    RATING["_bulk"] = asyncio.create_task(rate_all(pairs))
+    return BULK
 
 
 @api.post("/sets/{set_id}/rate-difficulty")

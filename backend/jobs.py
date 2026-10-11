@@ -8,7 +8,7 @@ import pymupdf
 from core import db, logger, put_object, get_object, APP_NAME
 from models import Job, JobMeta, Question, Part, PaperSet, DocSummary
 from llm import BudgetExceeded
-from ai import detect_segments, detect_meta, rate_difficulty, LEVELS
+from ai import detect_segments, detect_meta, rate_difficulty, calibrate_difficulty, LEVELS
 from catalogue import locate
 from imaging import page_jpeg, crop_parts, finalize, x_bounds, union_col, to_png
 
@@ -458,6 +458,11 @@ async def process_job(job_id: str):
                 q.erase_status = "pending"
                 q.flags.append(ERASE_FLAG)
             questions.append(q)
+        if doc_type == "question_paper":
+            try:
+                apply_difficulty(questions, await calibrate_questions(questions, doc, s.meta if s else job.meta, f"{job_id}-calibrate") or {})
+            except BudgetExceeded:
+                logger.warning("Spending limit reached: keeping per-page difficulty")
         doc.close()
 
         job = await load_job(job_id)
@@ -476,6 +481,43 @@ async def process_job(job_id: str):
         await refresh_set(job.set_id)
 
 
+def question_texts(doc, questions) -> List[str]:
+    out = []
+    for q in questions:
+        bits = []
+        for p in q.parts:
+            if p.page < doc.page_count:
+                r = doc[p.page].rect
+                bits.append(doc[p.page].get_text("text", clip=pymupdf.Rect(0, r.height * p.y0 / 1000, r.width, r.height * p.y1 / 1000)))
+        out.append(re.sub(r"\s+", " ", " ".join(bits)).strip()[:1200])
+    return out
+
+
+async def calibrate_questions(questions, doc, meta: JobMeta, session_id: str) -> Optional[dict]:
+    """Whole-paper difficulty from the PDF text: {qid: level}, or None when the text is missing (scans) or the AI fails."""
+    texts = question_texts(doc, questions)
+    if not questions or sum(len(t) >= 30 for t in texts) < 0.6 * len(questions):
+        return None
+    items = [{"n": i, "label": q.label, "marks": q.marks, "topic": q.topic, "text": t} for i, (q, t) in enumerate(zip(questions, texts))]
+    try:
+        res = await calibrate_difficulty(rating_context(meta), items, session_id)
+    except BudgetExceeded:
+        raise
+    except Exception as e:
+        logger.warning(f"Difficulty calibration failed: {e}")
+        return None
+    if len(res) < 0.8 * len(questions):
+        return None
+    return {questions[i].id: d for i, d in res.items() if 0 <= i < len(questions)}
+
+
+def apply_difficulty(questions, rated: dict):
+    for q in questions:
+        if q.id in rated:
+            q.difficulty = rated[q.id]
+            q.flags = [f for f in q.flags if f != DIFF_FLAG]
+
+
 def rating_context(meta: JobMeta) -> str:
     level = f"Grade {meta.grade}" if meta.grade else meta.qualification
     return " ".join(b for b in [(meta.curriculum or "").upper() or "South African", level, meta.subject] if b)
@@ -485,11 +527,16 @@ async def rate_set(set_id: str, job_id: str):
     """Ask the AI for the difficulty of every question image in an already-processed question paper."""
     try:
         await _rate_set(set_id, job_id)
+        return True
+    except BudgetExceeded as e:
+        await db.sets.update_one({"_id": set_id}, {"$set": {"rating.status": "error", "rating.error": str(e)}})
+        return False
     except Exception as e:
         logger.exception("Difficulty rating failed")
         await db.sets.update_one({"_id": set_id}, {"$set": {"rating.status": "error", "rating.error": str(e)}})
     finally:
         RATING.pop(set_id, None)
+    return True
 
 
 RATING: dict = {}
@@ -507,14 +554,17 @@ async def _rate_set(set_id: str, job_id: str):
             await db.sets.update_one({"_id": set_id}, {"$set": {"rating.done": done["n"]}})
             return q.id, d
 
-    results = await asyncio.gather(*[one(q) for q in job.questions], return_exceptions=True)
-    rated = dict(r for r in results if isinstance(r, tuple) and r[1])
-    errors = [r for r in results if isinstance(r, BaseException)]
+    doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
+    try:
+        rated, errors = await calibrate_questions(job.questions, doc, s.meta, f"{job_id}-calibrate"), []
+    finally:
+        doc.close()
+    if rated is None:  # scanned paper: rate each image on its own
+        results = await asyncio.gather(*[one(q) for q in job.questions], return_exceptions=True)
+        rated = dict(r for r in results if isinstance(r, tuple) and r[1])
+        errors = [r for r in results if isinstance(r, BaseException)]
     job = await load_job(job_id)
-    for q in job.questions:
-        if q.id in rated:
-            q.difficulty = rated[q.id]
-            q.flags = [f for f in q.flags if f != DIFF_FLAG]
+    apply_difficulty(job.questions, rated)
     renumber(job, s.base_name)
     await save_job(job)
     err = None
@@ -523,6 +573,26 @@ async def _rate_set(set_id: str, job_id: str):
     await db.sets.update_one({"_id": set_id}, {"$set": {"drive": None, "rating": {
         "status": "error" if errors else "done", "done": len(rated), "total": len(job.questions), "error": err}}})
     await refresh_set(set_id)
+
+
+BULK = {"status": "idle", "done": 0, "total": 0, "error": None}
+
+
+async def rate_all(pairs):
+    BULK.update(status="running", done=0, total=len(pairs), error=None)
+    for set_id, job_id in pairs:
+        if set_id in RATING:
+            continue
+        n = len((await load_job(job_id)).questions)
+        await db.sets.update_one({"_id": set_id}, {"$set": {"rating": {"status": "running", "done": 0, "total": n, "error": None}}})
+        RATING[set_id] = asyncio.current_task()
+        if not await rate_set(set_id, job_id):
+            BULK.update(status="error", error="Spending limit reached. Raise it and press the button again")
+            RATING.pop("_bulk", None)
+            return
+        BULK["done"] += 1
+    BULK["status"] = "done"
+    RATING.pop("_bulk", None)
 
 
 async def claim_next():
