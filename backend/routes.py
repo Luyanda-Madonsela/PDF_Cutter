@@ -2,7 +2,8 @@ import io
 import asyncio
 import zipfile
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
+from auth import require_user
 from fastapi.responses import Response, StreamingResponse
 import pymupdf
 from core import db, put_object, get_object, APP_NAME
@@ -12,7 +13,7 @@ from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, 
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
                   erase_proposals, ERASE_FLAG)
 
-api = APIRouter(prefix="/api")
+api = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
 JOB_EXCLUDE = {"page_paths", "page_masks"}
 
 

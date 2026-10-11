@@ -17,7 +17,7 @@ SUBJECT_ALIASES = {
 SUBJECT_FILES = {
     "maths": ["Maths"], "maths-lit": ["Maths Lit"], "physical-sciences": ["Physical Sciences", "Science"],
     "natural-sciences": ["Natural Sciences"],
-    "technical-maths": ["Technical Maths"], "technical-science": ["Technical Science", "Techincal Science"],
+    "technical-maths": ["Technical Maths"], "technical-science": ["Technical Science"],
 }
 FILES = {}
 for _g in range(12, 6, -1):

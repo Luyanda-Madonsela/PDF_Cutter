@@ -19,6 +19,15 @@ export const LOGIN = {
 	registerLink: 'login-register-link',
 };
 
+export const AUTH = {
+	loading: 'auth-loading',
+	loginScreen: 'auth-login-screen',
+	googleButton: 'auth-google-signin-button',
+	userMenu: 'auth-user-menu',
+	userName: 'auth-user-name',
+	logoutButton: 'auth-logout-button',
+};
+
 export const REGISTER = {
 	nameInput: 'register-name-input',
 	emailInput: 'register-email-input',

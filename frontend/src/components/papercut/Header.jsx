@@ -1,5 +1,6 @@
 import { Scissors } from "lucide-react";
 import { PC } from "@/constants/testIds";
+import { UserMenu } from "./UserMenu";
 
 const MODES = [["single", "One paper"], ["bulk", "Bulk upload"]];
 
@@ -27,6 +28,7 @@ export const Header = ({ mode, onMode }) => (
         <span className="h-2 w-2 rounded-full bg-[var(--pc-emerald)] animate-pulse" />
         gemini-3-flash
       </div>
+      <UserMenu />
     </div>
   </header>
 );

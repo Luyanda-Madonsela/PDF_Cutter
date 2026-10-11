@@ -2,6 +2,11 @@ import axios from "axios";
 
 export const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const data = (r) => r.data;
+axios.defaults.withCredentials = true;
+
+export const getMe = () => axios.get(`${API}/auth/me`).then(data);
+export const exchangeSession = (session_id) => axios.post(`${API}/auth/session`, { session_id }).then(data);
+export const logout = () => axios.post(`${API}/auth/logout`);
 
 export const createSet = ({ qp, memo, addenda, errata }, onProgress) => {
   const fd = new FormData();

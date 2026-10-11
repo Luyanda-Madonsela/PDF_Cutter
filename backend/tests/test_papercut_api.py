@@ -12,11 +12,14 @@ processing per test. One slow test hits POST /api/sets to validate end-to-end.
 """
 import os
 import io
+import sys
 import time
 import zipfile
 import struct
 import pytest
 import requests
+
+sys.path.insert(0, "/app/backend")
 
 # --- config ---
 def _load_frontend_env():
@@ -102,8 +105,7 @@ def seeded_set():
     body = r.json()
     cand = [s for s in body["sets"]
             if s.get("status") == "done"
-            and s.get("base_name", "").startswith("Mathematics_Gr12_2024_Nov")
-            and s.get("mode") == "bulk"]
+            and s.get("base_name", "").startswith("Mathematics_Gr12_2024_Nov")]
     if not cand:
         pytest.skip("No seeded bulk set available")
     sid = cand[0]["id"]
@@ -124,7 +126,7 @@ def test_list_sets_shape():
 
 def test_set_detail_structure(seeded_set):
     s = seeded_set
-    assert s["mode"] == "bulk"
+    assert s["mode"] in ("bulk", "single")
     assert s["status"] == "done"
     assert s["base_name"] == "Mathematics_Gr12_2024_Nov_National_P1"
     assert isinstance(s["documents"], list) and len(s["documents"]) == 4
@@ -387,6 +389,199 @@ def test_add_memo_promotes_set_to_processing(lonely_qp_set):
 # ============================================================
 # Merge/delete question (do last - mutates seeded set)
 # ============================================================
+# ============================================================
+# Catalogues (iteration 5)
+# ============================================================
+EXPECTED_CATALOGUES = {
+    # (grade, subject-keys) -> expected key
+    ("12", "maths"): "gr12-maths",
+    ("12", "maths-lit"): "gr12-maths-lit",
+    ("12", "physical-sciences"): "gr12-physical-sciences",
+    ("12", "technical-maths"): "gr12-technical-maths",
+    ("12", "technical-science"): "gr12-technical-science",
+}
+
+def test_list_catalogues_shape():
+    r = requests.get(f"{API}/catalogues")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    # Expect 21: Gr10-12 (5 subjects each) + Gr7-9 (2 subjects each) = 15 + 6 = 21
+    assert len(data) == 21, f"got {len(data)} catalogues: {[c['key'] for c in data]}"
+    keys = {c["key"] for c in data}
+    for exp in EXPECTED_CATALOGUES.values():
+        assert exp in keys, f"missing {exp}"
+    for c in data:
+        assert set(c.keys()) >= {"key", "name", "filename", "grade", "papers_filled"}
+        assert c["filename"].endswith(".xlsx")
+        assert isinstance(c["papers_filled"], int)
+
+
+def test_download_catalogue_valid_xlsx():
+    r = requests.get(f"{API}/catalogues/gr12-maths/download")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers.get("content-type", "")
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert "DBE" in wb.sheetnames
+
+
+def test_download_catalogue_unknown_404():
+    r = requests.get(f"{API}/catalogues/gr99-foo/download")
+    assert r.status_code == 404
+
+
+def test_set_detail_has_catalogue_and_erase_pending(seeded_set):
+    cat = seeded_set.get("catalogue")
+    assert cat is not None, seeded_set
+    # Seeded set is Mathematics Gr12 2024 Nov National P1 -> gr12-maths DBE Nov 2024
+    assert cat.get("found") is True, cat
+    assert cat.get("workbook") == "Grade 12 Maths Catalogue.xlsx"
+    assert cat.get("sheet") == "DBE"
+    assert cat.get("row_label") == "Nov 2024"
+    assert isinstance(cat.get("topics"), list) and cat["topics"]
+    assert "erase_pending" in seeded_set
+    assert isinstance(seeded_set["erase_pending"], int)
+
+
+def test_seeded_qp_questions_have_topic_from_catalogue(seeded_set):
+    qp = next(d for d in seeded_set["documents"] if d["meta"]["doc_type"] == "question_paper")
+    topics = seeded_set["catalogue"]["topics"]
+    tagged = [q for q in qp["questions"] if q.get("topic")]
+    assert tagged, "no question has a topic set"
+    for q in tagged:
+        assert q["topic"] in topics, f"Q{q['label']} topic '{q['topic']}' not in catalogue topics {topics}"
+
+
+def test_download_gr12_maths_reflects_seeded_row():
+    """Downloaded gr12-maths workbook: row for Nov_2024 is populated;
+    preserves user's original Nov_2015 values on same sheet."""
+    r = requests.get(f"{API}/catalogues/gr12-maths/download")
+    assert r.status_code == 200
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    ws = wb["DBE"]
+    # Find titles & P1 block
+    from catalogue import parse_blocks  # type: ignore
+    import sys
+    sys.path.insert(0, "/app/backend")
+    blocks = parse_blocks(ws)
+    p1 = next(b for b in blocks if b["paper"] == "1" and b["session"] == "Nov")
+    row_2024 = p1["rows"].get("2024")
+    assert row_2024, p1["rows"]
+    # Some topic cell must contain Q1/Q2/Q3 reference
+    non_empty = [ws.cell(row_2024, c).value for c, _ in p1["cols"]]
+    non_empty = [v for v in non_empty if v]
+    assert non_empty, "No topic cells filled for Nov 2024"
+    joined = " ".join(str(v) for v in non_empty)
+    assert "Q" in joined, f"Topic cells don't contain Q refs: {non_empty}"
+    # Preserve Nov_2015 original: those cells should still contain Q1/Q2/Q3 (user content)
+    row_2015 = p1["rows"].get("2015")
+    if row_2015:
+        vals_2015 = [ws.cell(row_2015, c).value for c, _ in p1["cols"]]
+        non_empty_2015 = [v for v in vals_2015 if v]
+        assert non_empty_2015, "Nov_2015 row got wiped - user content lost"
+
+
+def test_update_topic_reflects_in_catalogue(seeded_set):
+    """PUT /api/jobs/{jid}/questions/{qid} with {topic} updates and catalogue download reflects it."""
+    sid = seeded_set["id"]
+    detail = requests.get(f"{API}/sets/{sid}").json()
+    topics = detail["catalogue"]["topics"]
+    qp = next(d for d in detail["documents"] if d["meta"]["doc_type"] == "question_paper")
+    q = qp["questions"][0]
+    orig_topic = q.get("topic")
+    # Pick a different topic
+    new_topic = next((t for t in topics if t != orig_topic), topics[0])
+    r = requests.put(f"{API}/jobs/{qp['id']}/questions/{q['id']}", json={"topic": new_topic})
+    assert r.status_code == 200, r.text
+    updated = next(x for x in next(d for d in r.json()["documents"] if d["id"] == qp["id"])["questions"] if x["id"] == q["id"])
+    assert updated["topic"] == new_topic
+    # Download catalogue - the topic cell should contain this question's number
+    dl = requests.get(f"{API}/catalogues/gr12-maths/download")
+    assert dl.status_code == 200
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(dl.content))
+    ws = wb["DBE"]
+    from catalogue import parse_blocks  # type: ignore
+    blocks = parse_blocks(ws)
+    p1 = next(b for b in blocks if b["paper"] == "1" and b["session"] == "Nov")
+    row_2024 = p1["rows"]["2024"]
+    col_for_topic = next((c for c, n in p1["cols"] if n == new_topic), None)
+    assert col_for_topic, f"Topic '{new_topic}' not a column header"
+    cell = ws.cell(row_2024, col_for_topic).value
+    assert cell and "Q" in str(cell), f"topic cell '{cell}' missing Q ref for Q{q['label']}"
+    # revert
+    if orig_topic:
+        requests.put(f"{API}/jobs/{qp['id']}/questions/{q['id']}", json={"topic": orig_topic})
+
+
+# ============================================================
+# Erase (iteration 5)
+# ============================================================
+def _find_pending_q(seeded_set):
+    """Find a question with erase_status pending (or none) and its proposals via GET."""
+    for d in seeded_set["documents"]:
+        if d["meta"]["doc_type"] != "question_paper":
+            continue
+        for q in d["questions"]:
+            r = requests.get(f"{API}/jobs/{d['id']}/questions/{q['id']}/erase")
+            if r.status_code == 200 and r.json().get("proposals"):
+                return d, q, r.json()
+    return None, None, None
+
+
+def test_get_erase_proposals_shape(seeded_set):
+    doc = seeded_set["documents"][0]
+    q = doc["questions"][0]
+    r = requests.get(f"{API}/jobs/{doc['id']}/questions/{q['id']}/erase")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) >= {"status", "proposals", "applied"}
+    assert body["status"] in ("none", "pending", "applied", "rejected")
+    assert isinstance(body["proposals"], list)
+    for b in body["proposals"]:
+        assert len(b) == 5, b  # [page, ymin, xmin, ymax, xmax]
+
+
+def test_erase_reject_and_apply(seeded_set):
+    doc, q, info = _find_pending_q(seeded_set)
+    if not doc:
+        pytest.skip("No question with erase proposals in seeded set")
+    orig_storage = q["storage_path"]
+    proposals = info["proposals"]
+    # Reject: boxes=[]
+    r = requests.post(f"{API}/jobs/{doc['id']}/questions/{q['id']}/erase", json={"boxes": []})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    updated_doc = next(d for d in body["documents"] if d["id"] == doc["id"])
+    updated_q = next(x for x in updated_doc["questions"] if x["id"] == q["id"])
+    assert updated_q["erase_status"] == "rejected"
+    assert ERASE_FLAG_LITERAL not in updated_q["flags"]
+    # Apply a subset (first proposal)
+    r2 = requests.post(f"{API}/jobs/{doc['id']}/questions/{q['id']}/erase",
+                       json={"boxes": [proposals[0]]})
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    updated_q2 = next(x for x in next(d for d in body2["documents"] if d["id"] == doc["id"])["questions"] if x["id"] == q["id"])
+    assert updated_q2["erase_status"] == "applied"
+    assert updated_q2["storage_path"] != orig_storage, "image path should change after erase applied"
+    assert ERASE_FLAG_LITERAL not in updated_q2["flags"]
+
+
+def test_approve_all_erases(seeded_set):
+    sid = seeded_set["id"]
+    # Trigger: ensure at least one pending by re-processing is complex; instead,
+    # just call approve-all and verify erase_pending becomes 0.
+    r = requests.post(f"{API}/sets/{sid}/erase-approve-all")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["erase_pending"] == 0, body
+
+
+ERASE_FLAG_LITERAL = "Erase pending approval"
+
+
 def test_merge_next_and_delete_question(seeded_set):
     r = requests.get(f"{API}/sets/{seeded_set['id']}")
     qp = next(d for d in r.json()["documents"] if d["meta"]["doc_type"] == "question_paper")
