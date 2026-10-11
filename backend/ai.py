@@ -4,40 +4,82 @@ import asyncio
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
 from core import LLM_KEY, logger
 
-SEGMENT_PROMPT = """You are analysing ONE page image from a South African high school exam past paper (NSC/IEB/DBE, any subject, English or Afrikaans).
-Find where every question/sub-question region starts and stops vertically on this page.
-{memo_note}
+COMMON_RULES = """- Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments are in top-to-bottom order and do not overlap.
+- EXCLUDE page headers, footers, page numbers, "Copyright reserved", "Please turn over / Blaai om", exam centre / candidate boxes.
+- NEVER erase round-bracket mark allocations like (3), ticks or answer text; "exclude" boxes must be tight and only cover the listed items.
+- "exclude" boxes are tight bounding boxes [ymin, xmin, ymax, xmax] in 0-1000 coordinates of text that must be ERASED from the image.
+- "review": set to a short reason (string) when a segment needs a human to check it, e.g. a number/total that must be erased overlaps a diagram or other text so erasing it would damage content (in that case do NOT put it in exclude), the question layout is unusual (two columns, rotated page), or you are unsure where it starts/stops. Otherwise null.
+- If the TOP of the page continues an item from the previous page (content before any new number), output a segment with label "CONTINUED"."""
+
+QP_PROMPT = """You are analysing ONE page image from a South African high school exam QUESTION PAPER (NSC/IEB/DBE/provincial, any subject, English or Afrikaans).
+Find where every sub-question region starts and stops vertically on this page.
+
 Rules:
-- Split at SUB-QUESTION level: e.g. 1.1, 1.2, 2.1 ... Deeper parts (1.1.1, 1.1.2, (a), (b)) stay INSIDE their parent sub-question region (1.1).
-- If a main question has no sub-questions, use the main number, e.g. "3".
-- NEVER merge or skip sub-questions: EVERY distinct sub-question number (1.1, 1.2, 1.3 ...) that starts on this page gets its OWN segment, even if they are short, share an intro, or sit close together. First list them all in "labels_on_page" (top to bottom), then output exactly one segment per listed label (plus an optional leading "CONTINUED" segment).
-- MAIN QUESTION HEADINGS MUST BE LEFT OUT: the heading line "QUESTION 1" / "VRAAG 1" (and "SECTION A" / "AFDELING A" headings) must NOT be inside any segment - start the segment just BELOW the heading. Any shared intro text, passage, diagram or table between the heading and the first sub-question belongs to the region of that FIRST sub-question.
-- Include diagrams, tables and answer options belonging to a sub-question in its region. Keep the per-item mark allocations in round brackets, e.g. (3).
-- "marks": the total marks for that sub-question = sum of all round-bracket mark allocations like (2), (3) inside the segment (including its deeper parts). Use null if none are visible. For memos use the marks shown for that sub-question.
-- TOTALS MUST BE LEFT OUT: question totals in square brackets like [16] / [16 marks], section totals like "TOTAL SECTION A: 50" / "TOTAAL AFDELING A", and paper totals like "TOTAL: 150" / "GRAND TOTAL" must NOT be inside any segment where possible (end the segment above them).
-- "exclude": list EVERY such total marker on the page (square-bracket question totals, section totals, paper totals) AND every "QUESTION n" / "VRAAG n" / "SECTION X" heading as a tight bounding box [ymin, xmin, ymax, xmax] in 0-1000 coordinates, so it can be blanked out even if it sits on the same line as other text. Never include round-bracket sub-question marks in "exclude".
-- If the TOP of the page continues a question from the previous page (content before any new question number), output a segment with label "CONTINUED".
-- EXCLUDE page headers, footers, page numbers, "Copyright reserved", "Please turn over / Blaai om", exam centre boxes.
-- If the page has no questions (cover page, instructions, information/formula sheet, blank page, answer sheet, "TOTAL" only), return an empty segments list.
-- Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments must be in top-to-bottom order and not overlap. Each segment should extend down to just before the next segment starts.
+- Split at SUB-QUESTION level: 1.1, 1.2, 2.1 ... Deeper parts (1.1.1, 1.1.2, (a), (b)) stay INSIDE their parent sub-question region (1.1). If a main question has no sub-questions, use the main number, e.g. "3".
+- NEVER merge or skip sub-questions: EVERY distinct sub-question number that starts on this page gets its OWN segment. First list them all in "labels_on_page" (top to bottom), then output exactly one segment per listed label (plus an optional leading "CONTINUED" segment).
+- Headings "QUESTION 1" / "VRAAG 1" and "SECTION A" / "AFDELING A" (+ section instructions) are NOT part of any segment: start the segment just BELOW them. Shared intro text, passages, diagrams or tables between the heading and the first sub-question belong to that FIRST sub-question.
+- Include diagrams, tables and answer options belonging to a sub-question. Keep round-bracket mark allocations like (3).
+- "marks": total marks for that sub-question = sum of all round-bracket allocations like (2), (3) in it (including deeper parts). null if none visible.
+- ERASE via "exclude": (1) the sub-question's OWN number printed at its start (e.g. the "1.1" before the text; NOT the deeper 1.1.1 / (a) numbers); (2) "QUESTION n"/"VRAAG n"/"SECTION X" headings; (3) square-bracket question totals like [16]; (4) section totals like "TOTAL SECTION A: 50"; (5) paper totals like "TOTAL: 150" / "GRAND TOTAL". Segments should end above totals where possible.
+""" + COMMON_RULES + """
+- If the page has no questions (cover, instructions, information/formula sheet, blank page, answer sheet), return empty lists.
 
 Respond with ONLY JSON, no markdown:
-{{"labels_on_page":["1.1","1.2"],"segments":[{{"label":"1.1","y_start":120,"y_end":340,"marks":7}},{{"label":"1.2","y_start":340,"y_end":420,"marks":3}}],"exclude":[[425,880,440,930]]}}"""
+{"labels_on_page":["1.1","1.2"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null},{"label":"1.2","y_start":340,"y_end":420,"marks":3,"review":null}],"exclude":[[122,60,135,95],[425,880,440,930]]}"""
 
-MEMO_NOTE = """This page is from a MARKING GUIDELINE / MEMORANDUM. Each region is the answer and marking for one sub-question.
-Question numbers often appear in a left-hand column of a table; a region spans all table rows for that sub-question.
-Pages that contain only general marking notes, principles or cover info have no segments."""
+MEMO_PROMPT = """You are analysing ONE page image from a South African high school exam MARKING GUIDELINE / MEMORANDUM.
+Find where the answer/marking region for every sub-question starts and stops vertically on this page.
 
-META_PROMPT = """This is the first page (usually the cover) of a South African high school exam document.
+Rules:
+- Split at SUB-QUESTION level: 1.1, 1.2, 2.1 ... Answers for deeper parts (1.1.1, 1.1.2, (a)) stay INSIDE their parent sub-question region (1.1). If a main question has no sub-questions, use the main number.
+- Question numbers often appear in a left-hand column of a table; a region spans all rows for that sub-question.
+- EVERY distinct sub-question that starts on this page gets its own segment. First list them in "labels_on_page".
+- "marks": marks for that sub-question if shown, else null.
+- ERASE via "exclude": the sub-question's OWN number (e.g. "1.1" in the left column), "QUESTION n"/"VRAAG n" headings, square-bracket totals like [16], section and paper totals.
+""" + COMMON_RULES + """
+- Pages with only general marking notes, principles, cover info or blank have empty lists.
+
+Respond with ONLY JSON, no markdown:
+{"labels_on_page":["1.1"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null}],"exclude":[[122,40,135,80]]}"""
+
+ADDENDUM_PROMPT = """You are analysing ONE page image from an ADDENDUM / ANNEXURE / BYLAE of a South African exam paper. It contains graphs, diagrams, maps, tables, sources or extracts that students need for specific questions.
+Split the page into items (one per figure/table/source/extract).
+
+Rules:
+- "label": the question number the item is for, as printed (e.g. "FOR QUESTION 4.1" -> "4.1", "QUESTION 2" -> "2", "SOURCE 1A (Question 1.2)" -> "1.2"). Use "GENERAL" for items not tied to one question (formula/information sheets, general answer sheets, cover pages with content).
+- "marks": always null.
+- "exclude": usually empty.
+""" + COMMON_RULES + """
+- Blank pages or pure cover/instruction pages have empty lists.
+
+Respond with ONLY JSON, no markdown:
+{"labels_on_page":["4.1"],"segments":[{"label":"4.1","y_start":80,"y_end":600,"marks":null,"review":null}],"exclude":[]}"""
+
+ERRATA_PROMPT = """You are analysing ONE page image from an ERRATUM / ERRATA notice that corrects mistakes in a South African exam paper.
+Split the page into correction items - one per question being corrected.
+
+Rules:
+- "label": the question number being corrected (e.g. "QUESTION 3.2" -> "3.2"). Use "GENERAL" for corrections not tied to a question.
+- A segment covers the full correction text (and any replacement diagram) for that question. Do NOT include letterheads, addresses, greetings, signatures.
+- "marks": always null. "exclude": usually empty.
+""" + COMMON_RULES + """
+
+Respond with ONLY JSON, no markdown:
+{"labels_on_page":["3.2"],"segments":[{"label":"3.2","y_start":300,"y_end":420,"marks":null,"review":null}],"exclude":[]}"""
+
+PROMPTS = {"question_paper": QP_PROMPT, "memo": MEMO_PROMPT, "addendum": ADDENDUM_PROMPT, "errata": ERRATA_PROMPT}
+
+META_PROMPT = """This is the first page of a South African high school exam document.
 Extract metadata. Respond with ONLY JSON, no markdown:
 {"subject":"Mathematics","grade":"12","year":"2024","session":"Nov","province":"National","paper":"1","language":"English","doc_type":"question_paper"}
 Rules:
 - subject: short English subject name (e.g. "Mathematics", "Physical Sciences", "Life Sciences", "Accounting", "English HL", "Afrikaans FAL"). Translate Afrikaans names.
 - grade: digits only. year: 4 digits.
 - session (time of year): one of "Feb/Mar", "May/Jun", "Sep", "Nov", "Exemplar".
-- province: the issuing body. One of "GP" (Gauteng), "KZN" (KwaZulu-Natal), "WC" (Western Cape), "EC" (Eastern Cape), "FS" (Free State), "LP" (Limpopo), "MP" (Mpumalanga), "NW" (North West), "NC" (Northern Cape), "IEB", or "National" for national DBE / NSC papers. Look at logos, headers and department names.
+- province: issuing body. One of "GP", "KZN", "WC", "EC", "FS", "LP", "MP", "NW", "NC", "IEB", or "National" for national DBE / NSC papers. Look at logos, headers and department names.
 - paper: digits only ("1","2","3") or "" if none.
-- doc_type: "memo" if it is a marking guideline / memorandum / nasienriglyne, otherwise "question_paper".
+- language: "English" or "Afrikaans" (language of the document).
+- doc_type: "memo" for marking guidelines / memorandum / nasienriglyne; "addendum" for addendum / annexure / bylae / answer book inserts with diagrams; "errata" for erratum / errata / correction notices; otherwise "question_paper".
 - Use "" for anything not visible."""
 
 
@@ -46,6 +88,13 @@ def parse_json(text: str) -> dict:
     if not m:
         raise ValueError(f"No JSON in response: {text[:200]}")
     return json.loads(m.group(0))
+
+
+def to_int(v):
+    try:
+        return int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
@@ -71,23 +120,18 @@ async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
     raise RuntimeError(f"AI failed ({session_id}): {last_err}")
 
 
-async def detect_segments(img_b64: str, session_id: str, memo: bool) -> list:
-    data = await ask_json(SEGMENT_PROMPT.format(memo_note=MEMO_NOTE if memo else ""), img_b64, session_id)
+async def detect_segments(img_b64: str, session_id: str, doc_type: str):
+    data = await ask_json(PROMPTS.get(doc_type, QP_PROMPT), img_b64, session_id)
     out = []
     for s in data.get("segments", []):
         y0 = max(0, min(1000, int(s["y_start"])))
         y1 = max(0, min(1000, int(s["y_end"])))
         if y1 - y0 > 5:
-            out.append({"label": str(s.get("label", "CONTINUED")).strip(), "y0": y0, "y1": y1, "marks": to_int(s.get("marks"))})
+            review = s.get("review")
+            out.append({"label": str(s.get("label", "CONTINUED")).strip(), "y0": y0, "y1": y1,
+                        "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None})
     excl = [[max(0, min(1000, int(v))) for v in b] for b in data.get("exclude", []) if isinstance(b, list) and len(b) == 4]
     return sorted(out, key=lambda s: s["y0"]), excl
-
-
-def to_int(v):
-    try:
-        return int(v) if v is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 async def detect_meta(img_b64: str, session_id: str) -> dict:

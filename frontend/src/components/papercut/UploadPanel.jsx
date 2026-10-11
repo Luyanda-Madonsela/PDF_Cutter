@@ -13,8 +13,8 @@ export const UploadPanel = ({ onUpload, bulk }) => {
   const size = files.reduce((s, f) => s + f.size, 0) / 1048576;
 
   return (
-    <div className="pc-card p-6 sm:p-8 pc-rise">
-      <div className="pc-overline mb-3">01 — Feed papers</div>
+    <div data-testid="bulk-upload-panel" className="pc-card p-6 sm:p-8 pc-rise">
+      <div className="pc-overline mb-3">Bulk upload — papers, memos, addenda & errata together</div>
       <div
         data-testid={PC.dropzone}
         onClick={() => !busy && inputRef.current?.click()}
@@ -25,11 +25,11 @@ export const UploadPanel = ({ onUpload, bulk }) => {
       >
         <input ref={inputRef} data-testid={PC.fileInput} type="file" multiple accept="application/pdf,.pdf" className="hidden" onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
         <FileUp className="h-10 w-10 text-[var(--pc-amber)] mb-4" strokeWidth={1.5} />
-        <p className="font-heading text-xl font-bold">Drop question papers & memos here</p>
-        <p className="text-sm text-[var(--pc-text2)] mt-1">Select hundreds at once — they're queued and processed one after another</p>
+        <p className="font-heading text-xl font-bold">Drop a folder's worth of PDFs here</p>
+        <p className="text-sm text-[var(--pc-text2)] mt-1 max-w-md">The AI reads each cover and groups files into sets. A paper is only split once its memo is in the same set.</p>
         {files.length > 0 && (
           <div data-testid={PC.selectedFile} className="mt-6 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--pc-surface2)] font-mono text-xs">
-            <Files className="h-4 w-4" /> {files.length === 1 ? files[0].name : `${files.length} PDFs`} · {size.toFixed(1)} MB
+            <Files className="h-4 w-4" /> {files.length} PDFs · {size.toFixed(1)} MB
             {!busy && <button data-testid={PC.clearFiles} onClick={(e) => { e.stopPropagation(); setFiles([]); }} className="ml-1 hover:text-red-400"><X className="h-3.5 w-3.5" /></button>}
           </div>
         )}
@@ -43,13 +43,8 @@ export const UploadPanel = ({ onUpload, bulk }) => {
           <Progress value={(bulk.done / bulk.total) * 100} className="h-1.5 bg-[var(--pc-surface2)]" />
         </div>
       )}
-      <button
-        data-testid={PC.uploadButton}
-        disabled={!files.length || busy}
-        onClick={() => { onUpload(files); setFiles([]); }}
-        className="pc-btn-primary mt-6 w-full sm:w-auto"
-      >
-        {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</> : files.length > 1 ? `Queue ${files.length} PDFs` : "Split into questions"}
+      <button data-testid={PC.uploadButton} disabled={!files.length || busy} onClick={() => { onUpload(files); setFiles([]); }} className="pc-btn-primary mt-6 w-full sm:w-auto">
+        {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</> : `Queue ${files.length || ""} PDFs`}
       </button>
     </div>
   );

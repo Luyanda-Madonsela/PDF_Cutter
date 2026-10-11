@@ -1,46 +1,55 @@
 import { useState } from "react";
-import { Download, Trash2, RotateCw, Link2 } from "lucide-react";
-import { zipUrl } from "@/lib/api";
+import { Download, Trash2, Flag } from "lucide-react";
+import { setZipUrl } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
-const statusColor = { done: "text-[var(--pc-emerald)]", error: "text-red-400", processing: "text-[var(--pc-amber)]", queued: "text-[var(--pc-muted)]" };
-const FILTERS = [["all", "All"], ["active", "Active"], ["done", "Done"], ["error", "Failed"]];
+export const SET_STATUS = {
+  needs_memo: ["Needs memo", "text-red-400"],
+  needs_paper: ["Needs paper", "text-red-400"],
+  processing: ["Processing", "text-[var(--pc-amber)]"],
+  done: ["Done", "text-[var(--pc-emerald)]"],
+  error: ["Failed", "text-red-400"],
+};
+const FILTERS = [["all", "All"], ["incomplete", "Incomplete"], ["flagged", "Review"], ["done", "Done"], ["error", "Failed"]];
+const TILES = [["sorting", "Sorting"], ["needs_memo", "No memo"], ["processing", "Running"], ["done", "Done"], ["flagged", "Review"]];
+const DOC_CHIP = { question_paper: "QP", memo: "M", addendum: "A", errata: "E" };
 
-const matches = (j, f) => f === "all" || (f === "active" ? ["queued", "processing"].includes(j.status) : j.status === f);
+const matches = (s, f) => f === "all" || (f === "incomplete" ? s.status.startsWith("needs") : f === "flagged" ? s.flagged > 0 : s.status === f);
 
-const QueueItem = ({ j, active, onSelect, onDelete, onRetry }) => (
-  <li className={`group flex items-center gap-2 px-2 py-2 rounded-md transition-colors duration-150 ${active ? "bg-[var(--pc-surface2)]" : "hover:bg-[var(--pc-surface2)]/60"}`}>
-    <button data-testid={`history-item-${j.id}`} onClick={() => onSelect(j.id)} className="flex-1 min-w-0 text-left">
-      <p className="text-sm truncate flex items-center gap-1.5">
-        {j.meta?.doc_type === "memo" && <span className="text-[10px] font-mono px-1 rounded bg-[var(--pc-emerald)]/15 text-[var(--pc-emerald)]">MEMO</span>}
-        {j.paired_job_id && <Link2 className="h-3 w-3 text-[var(--pc-amber)] shrink-0" />}
-        <span className="truncate">{j.base_name || j.filename}</span>
-      </p>
-      <p className={`font-mono text-[11px] ${statusColor[j.status]}`}>
-        {j.status}{j.status === "processing" && j.total_pages ? ` ${j.pages_done}/${j.total_pages}p` : j.total_pages ? ` · ${j.total_pages}p` : ""}
-      </p>
-    </button>
-    {j.status === "done" && <a data-testid={`history-redownload-btn-${j.id}`} href={zipUrl(j.id)} className="p-1.5 rounded text-[var(--pc-text2)] hover:text-[var(--pc-amber)]"><Download className="h-4 w-4" /></a>}
-    {j.status === "error" && <button data-testid={`history-retry-btn-${j.id}`} onClick={() => onRetry(j.id)} className="p-1.5 rounded text-[var(--pc-text2)] hover:text-[var(--pc-amber)]"><RotateCw className="h-4 w-4" /></button>}
-    <button data-testid={`history-delete-btn-${j.id}`} onClick={() => onDelete(j.id)} className="p-1.5 rounded text-[var(--pc-muted)] hover:text-red-400 opacity-60 group-hover:opacity-100"><Trash2 className="h-4 w-4" /></button>
-  </li>
-);
+const SetItem = ({ s, active, onSelect, onDelete }) => {
+  const [label, color] = SET_STATUS[s.status] || [s.status, ""];
+  const chips = Object.entries(s.docs.reduce((a, d) => ({ ...a, [d.doc_type]: (a[d.doc_type] || 0) + 1 }), {}));
+  return (
+    <li className={`group flex items-center gap-2 px-2 py-2 rounded-md transition-colors duration-150 ${active ? "bg-[var(--pc-surface2)]" : "hover:bg-[var(--pc-surface2)]/60"}`}>
+      <button data-testid={`set-item-${s.id}`} onClick={() => onSelect(s.id)} className="flex-1 min-w-0 text-left">
+        <p className="text-sm truncate">{s.base_name || s.docs[0]?.filename || "Untitled set"}</p>
+        <p className="font-mono text-[11px] flex items-center gap-1.5 flex-wrap">
+          <span className={color}>{label}</span>
+          {chips.map(([t, n]) => <span key={t} className="text-[var(--pc-muted)]">{DOC_CHIP[t]}{n > 1 ? `×${n}` : ""}</span>)}
+          {s.flagged > 0 && <span className="text-[var(--pc-amber)] flex items-center gap-0.5"><Flag className="h-3 w-3" />{s.flagged}</span>}
+        </p>
+      </button>
+      {s.status === "done" && <a data-testid={`set-download-${s.id}`} href={setZipUrl(s.id)} className="p-1.5 rounded text-[var(--pc-text2)] hover:text-[var(--pc-amber)]"><Download className="h-4 w-4" /></a>}
+      <button data-testid={`set-delete-${s.id}`} onClick={() => onDelete(s.id)} className="p-1.5 rounded text-[var(--pc-muted)] hover:text-red-400 opacity-60 group-hover:opacity-100"><Trash2 className="h-4 w-4" /></button>
+    </li>
+  );
+};
 
-export const QueuePanel = ({ jobs, counts, activeId, onSelect, onDelete, onRetry }) => {
+export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete }) => {
   const [filter, setFilter] = useState("all");
-  const shown = jobs.filter((j) => matches(j, filter));
+  const shown = sets.filter((s) => matches(s, filter));
   return (
     <aside data-testid={PC.historySection} className="pc-card p-5 pc-rise lg:sticky lg:top-24">
-      <div className="pc-overline mb-3">Queue & history</div>
-      <div data-testid={PC.queueCounts} className="grid grid-cols-4 gap-1 mb-4 font-mono text-center">
-        {[["queued", "Queued"], ["processing", "Running"], ["done", "Done"], ["error", "Failed"]].map(([k, l]) => (
+      <div className="pc-overline mb-3">Paper sets</div>
+      <div data-testid={PC.queueCounts} className="grid grid-cols-5 gap-1 mb-4 font-mono text-center">
+        {TILES.map(([k, l]) => (
           <div key={k} className="rounded bg-[var(--pc-surface2)] py-1.5">
-            <div className={`text-sm ${statusColor[k]}`}>{counts[k] || 0}</div>
-            <div className="text-[9px] uppercase tracking-wider text-[var(--pc-muted)]">{l}</div>
+            <div className="text-sm">{k === "needs_memo" ? (counts.needs_memo || 0) + (counts.needs_paper || 0) : counts[k] || 0}</div>
+            <div className="text-[8px] uppercase tracking-wider text-[var(--pc-muted)]">{l}</div>
           </div>
         ))}
       </div>
-      <div className="flex gap-1 mb-3">
+      <div className="flex gap-1 mb-3 flex-wrap">
         {FILTERS.map(([k, l]) => (
           <button key={k} data-testid={`queue-filter-${k}`} onClick={() => setFilter(k)}
             className={`px-2 py-1 rounded text-xs font-mono transition-colors ${filter === k ? "bg-[var(--pc-amber)] text-[#0B0F19]" : "text-[var(--pc-text2)] hover:bg-[var(--pc-surface2)]"}`}>{l}</button>
@@ -48,7 +57,7 @@ export const QueuePanel = ({ jobs, counts, activeId, onSelect, onDelete, onRetry
       </div>
       {shown.length === 0 && <p data-testid={PC.historyEmpty} className="text-sm text-[var(--pc-muted)]">Nothing here yet.</p>}
       <ul className="space-y-1 max-h-[60vh] overflow-auto -mx-2">
-        {shown.map((j) => <QueueItem key={j.id} j={j} active={activeId === j.id} onSelect={onSelect} onDelete={onDelete} onRetry={onRetry} />)}
+        {shown.map((s) => <SetItem key={s.id} s={s} active={activeId === s.id} onSelect={onSelect} onDelete={onDelete} />)}
       </ul>
     </aside>
   );

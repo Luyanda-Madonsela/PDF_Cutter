@@ -3,96 +3,91 @@ import "@/App.css";
 import { Toaster, toast } from "sonner";
 import { Header } from "@/components/papercut/Header";
 import { UploadPanel } from "@/components/papercut/UploadPanel";
-import { ProgressPanel } from "@/components/papercut/ProgressPanel";
-import { ResultsPanel } from "@/components/papercut/ResultsPanel";
+import { SingleUpload } from "@/components/papercut/SingleUpload";
+import { SetView } from "@/components/papercut/SetView";
 import { QueuePanel } from "@/components/papercut/QueuePanel";
-import { uploadPdf, getJob, listJobs, deleteJob, retryJob } from "@/lib/api";
+import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, ACTIVE_DOC } from "@/lib/api";
 
-const ACTIVE = ["queued", "processing"];
 const UPLOAD_CONCURRENCY = 3;
 
 function App() {
-  const [job, setJob] = useState(null);
-  const [jobs, setJobs] = useState([]);
+  const [mode, setMode] = useState(() => localStorage.getItem("pc-mode") || "single");
+  const [set, setSet] = useState(null);
+  const [sets, setSets] = useState([]);
   const [counts, setCounts] = useState({});
   const [bulk, setBulk] = useState(null);
 
-  const refreshJobs = useCallback(() => listJobs().then((d) => { setJobs(d.jobs); setCounts(d.counts); }).catch(() => {}), []);
-  useEffect(() => { refreshJobs(); }, [refreshJobs]);
+  const changeMode = (m) => { setMode(m); localStorage.setItem("pc-mode", m); setSet(null); };
+  const refresh = useCallback(() => listSets().then((d) => { setSets(d.sets); setCounts(d.counts); }).catch(() => {}), []);
+  useEffect(() => { refresh(); }, [refresh]);
 
-  const queueActive = (counts.queued || 0) + (counts.processing || 0) > 0;
+  const queueActive = (counts.sorting || 0) + (counts.processing || 0) > 0;
   useEffect(() => {
     if (!queueActive) return;
-    const t = setInterval(refreshJobs, 3000);
+    const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
-  }, [queueActive, refreshJobs]);
+  }, [queueActive, refresh]);
 
-  const jobActive = job && (ACTIVE.includes(job.status) || ACTIVE.includes(job.paired?.status));
+  const setActive = set && set.documents.some((d) => ACTIVE_DOC.includes(d.status) && d.status !== "waiting");
   useEffect(() => {
-    if (!jobActive) return;
-    const t = setInterval(async () => {
-      const j = await getJob(job.id).catch(() => null);
-      if (!j) return;
-      if (ACTIVE.includes(job.status) && j.status === "done") toast.success(`${j.questions.length} questions extracted`);
-      setJob(j);
-    }, 2500);
+    if (!setActive) return;
+    const t = setInterval(() => getSet(set.id).then(setSet).catch(() => {}), 2500);
     return () => clearInterval(t);
-  }, [jobActive, job?.id, job?.status]);
+  }, [setActive, set?.id]);
 
-  const handleUpload = async (files) => {
+  const submitSingle = async (files) => {
+    try { const s = await createSet(files); setSet(s); refresh(); toast.success("Paper set queued"); return true; }
+    catch (e) { toast.error(e.response?.data?.detail || "Upload failed"); return false; }
+  };
+
+  const uploadBulk = async (files) => {
     const state = { total: files.length, done: 0, failed: 0 };
     setBulk({ ...state });
-    let first = null;
     const queue = [...files];
     const worker = async () => {
       while (queue.length) {
         const f = queue.shift();
-        try { const j = await uploadPdf(f); first = first || j; }
-        catch (e) { state.failed++; toast.error(`${f.name}: ${e.response?.data?.detail || "upload failed"}`); }
+        try { await uploadDoc(f); } catch (e) { state.failed++; toast.error(`${f.name}: ${e.response?.data?.detail || "upload failed"}`); }
         state.done++;
         setBulk({ ...state });
       }
     };
     await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, files.length) }, worker));
-    refreshJobs();
-    if (files.length === 1 && first) setJob(first);
-    else toast.success(`${state.done - state.failed} PDFs queued for processing`);
+    refresh();
+    toast.success(`${state.done - state.failed} PDFs queued — they'll be sorted into paper sets`);
     setBulk(null);
   };
 
-  const attachMemo = async (file) => {
-    try { await uploadPdf(file, null, job.id); toast.success("Memo queued — it will be paired automatically"); setJob(await getJob(job.id)); refreshJobs(); }
-    catch (e) { toast.error(e.response?.data?.detail || "Upload failed"); }
+  const openSet = (id) => getSet(id).then(setSet).catch(() => toast.error("Could not open set"));
+  const reload = () => { if (set) openSet(set.id); refresh(); };
+  const docHandlers = {
+    onRetry: async (id) => { await retryJob(id); reload(); },
+    onDelete: async (id) => { await deleteJob(id); reload(); },
+    onAdd: async (type, files) => {
+      try { for (const f of files) await uploadDoc(f, { setId: set.id, docType: type }); toast.success("Added to set"); }
+      catch (e) { toast.error(e.response?.data?.detail || "Upload failed"); }
+      reload();
+    },
   };
-
-  const openJob = (id) => getJob(id).then(setJob).catch(() => toast.error("Could not open job"));
-  const handleDelete = async (id) => { await deleteJob(id); if (job?.id === id) setJob(null); refreshJobs(); };
-  const handleRetry = async (id) => { await retryJob(id); refreshJobs(); if (job?.id === id) openJob(id); };
-  const onJobChange = (j) => { setJob(j); refreshJobs(); };
+  const removeSet = async (id) => { await deleteSet(id); if (set?.id === id) setSet(null); refresh(); };
+  const onSetChange = (s) => { if (s?.documents) setSet(s); refresh(); };
 
   return (
     <div className="min-h-screen bg-[var(--pc-bg)] text-[var(--pc-text)] font-body pc-grid-bg">
       <Toaster theme="dark" position="bottom-right" />
-      <Header />
+      <Header mode={mode} onMode={changeMode} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-9 space-y-8 min-w-0">
-          {!job && (
-            <div className="pc-rise">
-              <h1 className="font-heading text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.05]">
-                Every question,<br /><span className="text-[var(--pc-amber)]">cut clean.</span>
-              </h1>
-              <p className="mt-4 max-w-xl text-sm sm:text-base text-[var(--pc-text2)]">
-                Drop in South African past papers and memos. AI reads the cover to name everything, finds each sub-question (1.1, 1.2 …), crops and stitches it, and pairs every question with its memo answer in a labelled ZIP.
-              </p>
-            </div>
+          {!set && (
+            <h1 className="font-heading text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.05] pc-rise">
+              Every question,<br /><span className="text-[var(--pc-amber)]">cut clean.</span>
+            </h1>
           )}
-          {!job && <UploadPanel onUpload={handleUpload} bulk={bulk} />}
-          {job && job.status !== "done" && <ProgressPanel job={job} />}
-          {job && job.status !== "done" && <button data-testid="retry-new-pdf-button" onClick={() => setJob(null)} className="pc-btn-secondary">Back to upload</button>}
-          {job?.status === "done" && <ResultsPanel job={job} onReset={() => setJob(null)} onJobChange={onJobChange} onAttachMemo={attachMemo} onOpenJob={openJob} />}
+          {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
+          {set && <SetView set={set} onReset={() => setSet(null)} onSetChange={onSetChange} docHandlers={docHandlers} />}
         </div>
         <div className="lg:col-span-3">
-          <QueuePanel jobs={jobs} counts={counts} activeId={job?.id} onSelect={openJob} onDelete={handleDelete} onRetry={handleRetry} />
+          <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} />
         </div>
       </main>
     </div>

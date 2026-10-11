@@ -1,6 +1,7 @@
 export const PC = {
 	header: 'app-header',
 	modelBadge: 'ai-model-badge',
+	modeSwitch: 'upload-mode-switch',
 	dropzone: 'pdf-dropzone-container',
 	fileInput: 'pdf-file-input',
 	selectedFile: 'selected-file-name',

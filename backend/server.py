@@ -24,7 +24,10 @@ async def startup():
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
     await db.jobs.create_index([("status", 1), ("created_at", 1)])
-    await db.jobs.update_many({"status": "processing"}, {"$set": {"status": "queued"}})
+    await db.jobs.create_index([("set_id", 1)])
+    await db.sets.create_index([("is_deleted", 1), ("created_at", -1)])
+    await db.jobs.update_many({"status": "classifying"}, {"$set": {"status": "queued"}})
+    await db.jobs.update_many({"status": "processing"}, {"$set": {"status": "ready"}})
     app.state.worker = asyncio.create_task(worker_loop())
 
 

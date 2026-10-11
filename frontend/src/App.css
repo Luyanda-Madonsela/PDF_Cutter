@@ -43,6 +43,7 @@
 
 .pc-badge {
   display: inline-flex;
+  white-space: nowrap;
   align-items: center;
   padding: 2px 10px;
   border-radius: 999px;
