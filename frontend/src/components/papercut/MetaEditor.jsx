@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Pencil } from "lucide-react";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { updateMeta } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
@@ -24,6 +24,7 @@ export const MetaEditor = ({ job, onJobChange }) => {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent data-testid={PC.metaDialog} className="max-w-md bg-[var(--pc-surface)] border-[var(--pc-border)] text-[var(--pc-text)]">
           <DialogTitle className="font-heading text-xl">Paper details</DialogTitle>
+          <DialogDescription className="text-xs text-[var(--pc-text2)]">Used for file names and memo matching.</DialogDescription>
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.map(([k, l]) => (
               <label key={k} className="space-y-1">

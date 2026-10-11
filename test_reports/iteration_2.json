@@ -1,0 +1,39 @@
+{
+  "summary": "Full backend + frontend regression for PaperCut v2 (bulk queue, smart meta, crop adjust, memo pairing). 18/18 pytest cases pass against the live preview API in 72s (includes 3 real AI job runs). Frontend Playwright verifies: bulk file picker + 'Queue N PDFs' CTA, bulk-upload-progress bar, queue-counts tiles updating live as jobs move queued->running->done, queue-filter-* tabs, history item open, job-meta-bar + edit-meta-dialog, memo-status (5/5 matched shown), question-card lightbox with lightbox-tab-question / lightbox-tab-partner / lightbox-tab-adjust, crop-handle-top-0 + crop-handle-bottom-0 + crop-save-button + crop-add-page-button rendered, question-label-input + save, merge-next and delete buttons. Jobs are processed sequentially by the single worker as expected. No critical bugs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dialogs (meta-dialog, question-lightbox)", "issues": ["Radix warns in console: 'Missing Description or aria-describedby for DialogContent'. Add <DialogDescription> (or aria-describedby=undefined) for a11y."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_papercut_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Low) Add DialogDescription to MetaEditor and QuestionDialog to silence Radix a11y warning.",
+    "(Low, carry-over from iter 1) _storage_call now DOES retry on 5xx (verified in core.py line 50-52) — iteration_1 action item is already addressed."
+  ],
+  "critical_code_review_comments": [
+    "jobs.py `try_pair` matches on exact case-insensitive subject/grade/year/session/paper. If AI returns e.g. 'Nov' vs 'November' for the same pair, auto-match fails. Consider normalising session via SESSION_ABBR before matching.",
+    "routes.py PATCH /jobs/{id}/meta: `type_changed or not job.paired_job_id` — the `not paired_job_id` branch means every meta edit on an unpaired job calls unpair()+try_pair(). Fine, but if user is just fixing a typo in `language` or `paper` an auto-pair might attach the wrong partner. Low risk.",
+    "merge_next in routes.py uses `p.y0 <= parts[-1].y1 + 30` to decide if two parts touch — magic number, document it.",
+    "process_job loads entire PDF + all page JPEGs (b64) in memory. For 20+ page papers RAM pressure will grow linearly; worth streaming or chunking later.",
+    "worker_loop sleeps 2s when queue empty — acceptable but no graceful shutdown handling; on SIGTERM an in-flight job will be marked error by startup migration on next boot (iter 1 noted this)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_papercut_api.py (rewritten for v2 API: bulk, meta, pairing, zip _MEMO, crop, merge/delete, retry, pair_with, delete-unpair — 18 tests)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100%"},
+  "test_credentials": "N/A - no auth",
+  "seed_data_creation": "Each paired_jobs fixture upload leaves 2 new jobs in DB (paired, done). test_pair_with_forces_memo_and_delete_unpairs cleans up its own 2 jobs. Running tests multiple times accumulates jobs — ran once in this iteration; DB currently has ~6 done jobs (manual + fixture).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression: pytest -n 0 backend/tests/test_papercut_api.py (xdist loadscope OK too). Takes ~75s due to 3 real AI processing cycles. Frontend verified via live preview; sample PDFs at /app/tests/sample_paper.pdf and /app/tests/sample_memo.pdf consistently detect Mathematics Gr12 2024 Nov P1 and auto-pair. If the DB gets cluttered, delete via DELETE /api/jobs/{id} — soft delete only. Note crop-handle testids are index-based (crop-handle-top-0, crop-handle-bottom-0 for first part).",
+  "rca_of_the_issue": "N/A - no bugs found this iteration."
+}

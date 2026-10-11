@@ -9,7 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 import pymupdf
 from core import db, put_object, get_object, APP_NAME
 from models import Job, JobMeta, QuestionUpdate
-from jobs import load_job, save_job, renumber, try_pair, unpair, build_question, norm_label
+from jobs import load_job, save_job, renumber, try_pair, unpair, build_question, norm_label, canon_session
 
 api = APIRouter(prefix="/api")
 SUMMARY_EXCLUDE = {"questions": 0, "page_paths": 0}
@@ -98,11 +98,13 @@ async def retry_job(job_id: str):
 async def update_meta(job_id: str, meta: JobMeta):
     job = await job_or_404(job_id)
     require_done(job)
-    type_changed = job.meta.doc_type != meta.doc_type
+    keys = ("doc_type", "subject", "grade", "year", "session", "paper")
+    meta.session = canon_session(meta.session)
+    type_changed = any(getattr(job.meta, k) != getattr(meta, k) for k in keys)
     job.meta = meta
     renumber(job)
     await save_job(job)
-    if type_changed or not job.paired_job_id:
+    if type_changed:
         await unpair(job)
         job.paired_job_id = None
         await try_pair(job)

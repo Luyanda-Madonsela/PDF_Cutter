@@ -13,6 +13,14 @@ CONCURRENCY = 6
 SESSION_ABBR = {"february": "Feb", "march": "Mar", "may": "May", "june": "Jun", "september": "Sep", "november": "Nov", "exemplar": "Exemplar"}
 
 
+def canon_session(s: str) -> str:
+    low = (s or "").strip().lower()
+    for full in SESSION_ABBR:
+        if low and (full.startswith(low[:3]) or low.startswith(full[:3])):
+            return full.capitalize()
+    return (s or "").strip()
+
+
 def slug(s: str) -> str:
     return re.sub(r"_+", "_", re.sub(r"[^A-Za-z0-9]+", "_", s or "")).strip("_")
 
@@ -114,6 +122,7 @@ async def process_job(job_id: str):
         meta_task = asyncio.create_task(detect_meta(b64s[0], f"{job_id}-meta"))
         page_paths = await asyncio.gather(*[put_object(f"{APP_NAME}/jobs/{job_id}/page_{i}.jpg", j, "image/jpeg") for i, j in enumerate(jpgs)])
         meta = JobMeta(**{k: v for k, v in (await meta_task).items() if k in JobMeta.model_fields})
+        meta.session = canon_session(meta.session)
         if job.forced_memo:
             meta.doc_type = "memo"
         is_memo = meta.doc_type == "memo"

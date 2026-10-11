@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download, Merge, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
 import { imageUrl, updateQuestion, mergeNext, deleteQuestion } from "@/lib/api";
@@ -34,7 +34,7 @@ export const QuestionDialog = ({ job, qid, onClose, onJobChange }) => {
         {q && (
           <>
             <div className="flex items-center justify-between gap-3 pr-8 flex-wrap">
-              <DialogTitle className="font-heading text-xl">Question {q.label}</DialogTitle>
+              <div><DialogTitle className="font-heading text-xl">Question {q.label}</DialogTitle><DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}</DialogDescription></div>
               <a data-testid={PC.lightboxDownload} href={imageUrl(job.id, q.id) + v} download={q.filename} className="pc-btn-secondary text-xs font-mono">
                 <Download className="h-4 w-4" /> {q.filename}
               </a>

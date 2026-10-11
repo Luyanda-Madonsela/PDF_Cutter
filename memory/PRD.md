@@ -16,8 +16,14 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - MVP done end to end and tested (backend 9/9, frontend flows passing)
 - Storage calls retry on 5xx errors; page images are cleared from memory once used
 
+## Iteration 2 (2026-06)
+- Bulk upload queue: drop many PDFs at once (3 upload at a time); a single background worker processes jobs in order and picks up where it left off after a restart; queue counts, filters and retry for failed jobs
+- Smart file naming: AI reads the cover page (subject, grade, year, session, paper, Q-paper vs memo), e.g. Mathematics_Gr12_2024_Nov_P1_001_Q1.1.png; details can be edited and files are renamed
+- Crop adjusting: page preview with draggable top/bottom edges, extend onto the next page, rename, merge with next, delete
+- Memo matching: memos pair automatically by subject/grade/year/session/paper or can be attached manually; question paper ZIP includes *_MEMO.png next to each question plus memo_unmatched/
+- Backend split into core/models/ai/imaging/jobs/routes modules; 18 pytest cases passing
+
 ## Backlog
-- P0: Batch/bulk upload with a queue (for 10k PDFs), plus a combined ZIP
-- P1: Manual re-crop/adjust boundaries; matching memo (answer) PDFs to question images
-- P1: Metadata in filenames (subject, grade, year, paper)
-- P2: Upload size limit; resume jobs after a restart
+- P1: Combined ZIP download for many papers (e.g. by subject/year)
+- P1: Split a single image into two
+- P2: Upload size limit; more than one worker for higher throughput
