@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 16 (file saved as iteration_15.json since iter15 report was named iteration_14.json). Verified the Difficulty Rating feature end-to-end. Backend: 7/7 new tests pass (test_iter16.py). Frontend: SetView shows rate-difficulty-button, 63 question-difficulty-{order} badges, QuestionDialog has question-difficulty-select with No difficulty / Easy/Beginner / Medium / Hard options and the download link filename ends with _<Diff>.png. Rate-difficulty endpoint, 400 on bogus/concurrent, filename renumber with marks+difficulty, memo sync (hardest), catalogue 'Difficulty' column, and norm_difficulty all verified. Used the pre-existing rated clone in /tmp/nid plus one additional cloned+rated set with a single question (1 AI call) to exercise the concurrent-POST 400 path.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter16.py",
+    "/app/test_reports/pytest/iter16_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "jobs.renumber: diff suffix is appended AFTER marks suffix (e.g. _3marks_Hard) and used standalone when marks is None (_Hard) - matches spec exactly.",
+    "jobs.sync_difficulty picks 'hardest' when a memo label matches multiple QP sub-labels (e.g. memo '1.1' covers QP '1.1.1' + '1.1.2'); hardest([None, 'weird', 'Easy']) correctly ignores non-LEVELS values.",
+    "routes.rate_set_difficulty uses in-memory RATING dict for the concurrency guard; this is per-process - fine for single-worker uvicorn but will NOT prevent concurrent runs across replicas. Acceptable for current single-worker deploy.",
+    "routes.update_question difficulty: '' sentinel reliably clears field (q.difficulty = body.difficulty or None) and strips DIFF_FLAG. Unknown non-empty value -> 400 'Difficulty must be Easy, Medium or Hard'.",
+    "catalogue.write_difficulty inserts the Difficulty column immediately right of the last topic/errata column and only writes the header into a non-MergedCell; subsequent writes update per-row text. Confirmed 'Easy:/Medium:/Hard:' format with linebreaks.",
+    "ai.norm_difficulty is forgiving: 'beginner', 'moderate', 'challenging' all map correctly; empty/None/garbage -> None.",
+    "frontend lib/api.js DIFFICULTY['Easy'] label is 'Easy/Beginner' per user choice, while backend LEVELS stores canonical 'Easy' - handled by the UI mapping only. OK.",
+    "frontend RateDifficultyButton guards on set.qp_id (hides for sets without a QP job)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (badge, button, select, filename verified)"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut (cookie session_token on frontend domain)",
+  "seed_data_creation": "test_rate_difficulty_concurrent_returns_400 clones the IEB set, trims QP to 1 question, triggers a real rate-difficulty (1 Gemini call) and verifies the concurrent-POST 400, then soft-deletes the clone and all its jobs. The existing /tmp/nid clone remains in place with its 63 rated QP questions (and 50 synced memo questions) - the Hard/clear test restores the original difficulty of the mutated question in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter16.py uses existing /tmp/nid clone for most assertions; it mutates one QP question's difficulty (sets Hard, clears to None, then restores). The concurrent-POST test creates+deletes its own clone with just 1 question. Catalogue IEB sheet now contains 'Difficulty' header + 'Easy:/Medium:/Hard: Qx.y' cells for the TEST set. Frontend route is /sets/{id} after clicking 'Done' tab + the set name (direct deep-link also works once session cookie is present on papercut-sa.preview.emergentagent.com).",
+  "rca of the issue": "N/A - no bugs found."
+}
