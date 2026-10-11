@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 11: tested Drive PKCE fix and Cost Tracker. Backend: 9/9 new tests pass (test_iter11.py) covering: /drive/connect returns PKCE code_challenge S256 + stores matching code_verifier in db.drive_states (verified sha256(verifier)==challenge); callback with unknown state redirects to /?drive=error; callback with valid state + fake code redirects to /?drive=error AND backend log does NOT show 'Missing code verifier' (confirms verifier is now sent to fetch_token); POST /api/ai/test increments gemini-3-flash-preview usage with price [0.5,3.0] cost>0 paid_by 'Emergent credits'; GET /api/ai/usage days=1/7/365; PUT /api/ai/prices accepts model names with dots ('gemini-3.1-pro-preview'); negative input/output -> 400; empty model -> 400; price override reflected in cost. Regression: test_iter10 + test_auth = 28/28 passed. Frontend: AI dialog opens, 'Usage & cost' tab shows ai-usage-panel with ai-usage-total-cost ($0.0034), ai-usage-total-calls (3 pages read), ai-usage-row-gemini-3-flash-preview, ai-usage-days select; editing ai-price-in/out- + ai-price-save- updated cost 0.0034 -> 0.0090; restored to 0.5/3 after.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter11.py",
+    "/app/test_reports/pytest/iter11_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "llm.record_usage keys by (day, provider, model); if a user switches between providers using the same model name (e.g. gemini via emergent then via gemini key with gemini-3-flash-preview), rows are separate — intended.",
+    "llm.prices() returns DEFAULT_PRICES merged with overrides; set_price only validates non-negative but no upper bound and no type check beyond pydantic float. Fine.",
+    "drive.callback: on exception the state has already been deleted via find_one_and_delete, so a retried callback with same state yields /?drive=error (unknown state) — acceptable for one-shot flow."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11.py (new)"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut (or cookie session_token=test_session_qa_papercut)",
+  "seed_data_creation": "Price overrides written during tests are restored to defaults (0.5/3.0) at end; a gemini-3.1-pro-preview price doc remains with 2.0/12.0 which equals the DEFAULT, so no effective change.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "AI provider remains emergent. Drive PKCE verified via DB state inspection; full OAuth cannot be automated without real Google consent. Price overrides stored in db.ai_prices.",
+  "rca of the issue": "N/A - validated fixes work: PKCE verifier is correctly stored and used; cost tracker records usage and reflects price edits."
+}

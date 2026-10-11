@@ -93,3 +93,8 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 ## Blockers / next
 - The user must add the redirect URI https://papercut-sa.preview.emergentagent.com/api/drive/callback under "Authorised redirect URIs" (currently empty) and add luyandasmadonselageneral@gmail.com as a test user. Then do the first real Drive upload and import
 - P1: fix the 3 old seed-drift pytest cases
+
+## Iteration 11 (2026-06)
+- Fixed Drive connect: "invalid_grant Missing code verifier" (PKCE). The connect step now stores flow.code_verifier in drive_states, and the callback restores it
+- Cost tracker: db.ai_usage counts per day/provider/model (calls = pages read, tokens in/out); GET /api/ai/usage; editable prices (db.ai_prices, USD per 1M tokens, defaults in llm.DEFAULT_PRICES); "Usage & cost" tab in the AI dialog. Tracking starts 11 Oct 2026
+- Tests: iteration_11 100%
