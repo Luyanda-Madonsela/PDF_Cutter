@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 17: Verified the new 'Manual difficulty picker in Adjust crop tab' feature. Backend 5/5 pytest pass (test_iter17.py): QP tab PUT difficulty=Hard renames QP file + syncs memo filename to _Hard.png; Memo tab PUT difficulty updates matching QP question and renames both; memo main label propagates to all QP sub-children (hits = startswith norm+'.' when no exact leaf match); crafted memo label 99.99 that has no QP match -> 400 'No Q99.99 in the question paper to rate'; LEVELS is case-sensitive so 'beginner' as the raw value -> 400. Frontend Playwright test on cloned set 464fc59b-8580-40e3-89fc-249ed0ee9fa5: Adjust crop tab exposes [data-testid=crop-difficulty] with crop-difficulty-easy/-medium/-hard buttons, current level highlighted via bg-white/10, tap Hard => toast 'Difficulty set to Hard', stays on Adjust tab, lightbox-download-button filename updates to _Hard.png, closing dialog shows updated question-difficulty-{order} badge on card. Memo tab -> linked-memo-{qid}-adjust shows linked-memo-{qid}-difficulty picker with 3 buttons; tap Easy => toast 'Difficulty set to Easy/Beginner', stays on adjust mode, linked filename span updates to MEMO_Q1.1_Easy.png. No regressions on question-difficulty-select dropdown.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter17.py",
+    "/app/test_reports/pytest/iter17_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DifficultyPicker is correctly idempotent: clicking the already-selected level is a no-op (k !== value guard), avoiding redundant PUT.",
+    "LinkedEditor passes stay=true to act() so the picker remains on the Adjust tab after save, matching the user choice 'saves instantly on tap' without closing the editor.",
+    "QuestionDialog.Adjust uses the same act() wrapper (stay implicit by not calling setTab after onPick), so it also stays on the Adjust crop tab after rating is saved - verified in Playwright.",
+    "routes.set_qp_difficulty's fallback (startswith norm+'.') correctly propagates a memo main-label rating to all QP sub-children (e.g. memo '4' -> QP '4.1' and '4.2'). renumber then regenerates filenames.",
+    "routes.update_question accepts difficulty='' to clear (q.difficulty = body.difficulty or None) and strips DIFF_FLAG; a non-empty bogus value returns 400 'Difficulty must be Easy, Medium or Hard'. 'beginner' lowercase is treated as bogus here (LEVELS is strict); frontend DIFFICULTY labels map 'Easy' -> 'Easy/Beginner' which is correct separation of label vs canonical value.",
+    "DifficultyPicker uses testIds `${testId}-${k.toLowerCase()}` so main-tab buttons are crop-difficulty-easy/-medium/-hard and linked-memo-{qid}-difficulty-easy/-medium/-hard - exactly matching the test contract.",
+    "Rating via memo correctly surfaces 'No Qx in the question paper to rate' to the toast (toast.error consumes response.data.detail). Spec compliant."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter17.py (new)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (QP picker, linked memo picker, toast, filename, badge, stay-on-adjust all verified)"},
+  "test_credentials": "Authorization: Bearer test_session_qa_papercut (cookie session_token on frontend domain)",
+  "seed_data_creation": "None. Used existing cloned set 464fc59b-8580-40e3-89fc-249ed0ee9fa5. test_memo_no_qp_match_returns_400 temporarily sets a memo question label to '99.99' via Mongo then restores it. test_qp_adjust_set_hard_syncs_memo and test_memo_adjust_set_easy_updates_matching_qp restore original difficulty in finally. Final state of Q1.1 confirmed back to 'Easy'.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter17.py relies on /tmp/nid clone and restores all mutations. Combined with test_iter16.py this covers both AI rate-difficulty and manual picker flows. Frontend contract: crop-difficulty picker on QP Adjust tab, linked-{kind}-{qid}-difficulty picker inside LinkedEditor Adjust mode, both toasts message 'Difficulty set to {Easy/Beginner|Medium|Hard}'. Stay-on-tab behavior is driven by the `stay` arg of QuestionDialog.act / LinkedEditor.act.",
+  "rca of the issue": "N/A - no bugs found; feature works end-to-end."
+}

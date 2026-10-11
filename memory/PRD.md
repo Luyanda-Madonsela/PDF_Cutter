@@ -123,3 +123,7 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - llm.complete supports img_b64=None (text-only).
 - "Re-rate all difficulty" button (QueuePanel) -> POST/GET /api/sets/rate-difficulty-all; replaces ALL ratings incl. manual (user choice). Ran once on 2026-06 for both finished sets.
 - Test result: IEB PhysSci 2023 P2 went from 0% Hard to 41% Hard by marks. Drive files renamed in place (verified).
+
+## 2026-06 — Difficulty picker in crop editor
+- One-tap Easy/Beginner · Medium · Hard picker (DifficultyPicker.jsx) in the Adjust crop tab (QuestionDialog) and in memo/addendum/errata linked editors; saves instantly.
+- Rating a memo/addendum/errata question updates the matching QP question (exact label, else all its sub-questions) via set_qp_difficulty in routes.py; sync_difficulty copies it back to every linked file. Tested iteration 17 (100%).
