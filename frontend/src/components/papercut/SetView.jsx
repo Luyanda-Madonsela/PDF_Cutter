@@ -5,6 +5,7 @@ import { QuestionDialog } from "./QuestionDialog";
 import { MetaEditor } from "./MetaEditor";
 import { DocumentsPanel } from "./DocumentsPanel";
 import { DriveSetPanel } from "./DriveSet";
+import { RecropSetButton } from "./Recrop";
 import { SET_STATUS } from "./QueuePanel";
 import { setZipUrl, DOC_LABEL, approveAllErases } from "@/lib/api";
 import { toast } from "sonner";
@@ -37,7 +38,7 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
             <MetaEditor set={set} onSetChange={onSetChange} />
           </div>
           <CatalogueLine cat={set.catalogue} />
-          <div className="mt-3"><DriveSetPanel set={set} onSetChange={onSetChange} /></div>
+          <div className="mt-3 flex items-center gap-2 flex-wrap"><DriveSetPanel set={set} onSetChange={onSetChange} /><RecropSetButton set={set} onSetChange={onSetChange} /></div>
         </div>
         <div className="flex gap-3 flex-wrap shrink-0">
           <button data-testid={PC.newPdfButton} onClick={onReset} className="pc-btn-secondary"><Plus className="h-4 w-4" /> Upload more</button>

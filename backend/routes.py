@@ -110,6 +110,49 @@ async def list_sets():
     return {"sets": [PaperSet.from_mongo(d).model_dump() for d in docs], "counts": counts}
 
 
+def has_manual_edits(job: Job) -> bool:
+    return any(q.reviewed or q.erase_status in ("applied", "rejected") or q.erase_manual for q in job.questions)
+
+
+async def done_qp_jobs():
+    sets = [PaperSet.from_mongo(d) for d in await db.sets.find({"is_deleted": False, "status": "done"}).to_list(20000)]
+    out = []
+    for s in sets:
+        qp = next((j for j in await set_jobs(s.id) if j.meta.doc_type == "question_paper" and j.status == "done"), None)
+        if qp:
+            out.append((s, qp))
+    return out
+
+
+async def recrop(s: PaperSet, qp: Job):
+    await set_fields(qp.id, status="ready", questions=[], pages_done=0, error=None)
+    await db.sets.update_one({"_id": s.id}, {"$set": {"drive": None}})  # finished re-crop re-uploads to Drive
+    await refresh_set(s.id)
+
+
+@api.get("/sets/recrop-preview")
+async def recrop_preview():
+    pairs = await done_qp_jobs()
+    return {"sets": len(pairs), "edited": sum(has_manual_edits(qp) for _, qp in pairs)}
+
+
+@api.post("/sets/recrop-all")
+async def recrop_all():
+    pairs = await done_qp_jobs()
+    for s, qp in pairs:
+        await recrop(s, qp)
+    return {"queued": len(pairs)}
+
+
+@api.post("/sets/{set_id}/recrop")
+async def recrop_set(set_id: str):
+    pair = next((p for p in await done_qp_jobs() if p[0].id == set_id), None)
+    if not pair:
+        raise HTTPException(400, "Only finished paper sets with a question paper can be re-cropped")
+    await recrop(*pair)
+    return await set_detail(await load_set(set_id))
+
+
 @api.get("/sets/{set_id}")
 async def get_set(set_id: str):
     return await set_detail(await set_or_404(set_id))

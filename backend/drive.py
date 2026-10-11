@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -42,8 +43,13 @@ def _flow(scopes):
     return Flow.from_client_config(_client_config(), scopes=scopes, redirect_uri=os.environ["GOOGLE_DRIVE_REDIRECT_URI"])
 
 
-def root_path() -> List[str]:
-    return [p.strip() for p in os.environ["DRIVE_ROOT_PATH"].split("/") if p.strip()]
+def split_path(path: str) -> List[str]:
+    return [p.strip() for p in path.replace("My Drive/", "", 1).split("/") if p.strip()]
+
+
+async def root_path() -> List[str]:
+    doc = await db.settings.find_one({"_id": "drive"})
+    return split_path(doc["root_path"] if doc else os.environ["DRIVE_ROOT_PATH"])
 
 
 # ---------- OAuth ----------
@@ -95,7 +101,26 @@ async def drive_service():
 @drive_api.get("/status")
 async def status(user: User = Depends(require_user)):
     doc = await db.drive_credentials.find_one({"_id": CRED_ID}, {"_id": 0, "connected_by": 1, "updated_at": 1})
-    return {"connected": bool(doc), "connected_by": doc and doc.get("connected_by"), "root": "/".join(["My Drive", *root_path()])}
+    return {"connected": bool(doc), "connected_by": doc and doc.get("connected_by"), "root": "/".join(["My Drive", *await root_path()])}
+
+
+class DriveSettings(BaseModel):
+    root_path: str
+
+
+@drive_api.put("/settings")
+async def save_settings(body: DriveSettings, user: User = Depends(require_user)):
+    parts = split_path(body.root_path)
+    if not parts:
+        raise HTTPException(400, "Folder path cannot be empty")
+    svc = await drive_service()
+    if svc:
+        try:
+            await asyncio.to_thread(DriveWriter(svc, parts).folder, parts)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e))
+    await db.settings.update_one({"_id": "drive"}, {"$set": {"root_path": "/".join(parts), "updated_by": user.email}}, upsert=True)
+    return {"root": "/".join(["My Drive", *parts]), "checked": bool(svc)}
 
 
 @drive_api.post("/disconnect")
@@ -122,8 +147,8 @@ def _retry(req):
 
 
 class DriveWriter:
-    def __init__(self, svc):
-        self.svc, self.cache = svc, {}
+    def __init__(self, svc, root: List[str]):
+        self.svc, self.cache, self.root = svc, {}, root
 
     def _find(self, parent: str, name: str, folder: bool):
         mime = f"(mimeType='{FOLDER}' or mimeType='{SHORTCUT}')" if folder else f"mimeType!='{FOLDER}'"
@@ -146,7 +171,7 @@ class DriveWriter:
             if key not in self.cache:
                 fid = self._find(parent, name, True)
                 if not fid:
-                    if i < len(root_path()) and not create_root:
+                    if i < len(self.root) and not create_root:
                         raise RuntimeError(f"Drive folder not found: My Drive/{key}")
                     fid = _retry(self.svc.files().create(body={"name": name, "mimeType": FOLDER, "parents": [parent]},
                                                          fields="id", supportsAllDrives=True))["id"]
@@ -168,19 +193,19 @@ class DriveWriter:
 
 
 # ---------- set -> Drive layout ----------
-def paper_folder(meta) -> List[str]:
+def paper_folder(meta, root: List[str]) -> List[str]:
     subj = (meta.subject or "").strip()
     key = next((k for k, al in SUBJECT_ALIASES.items() if subj.lower() in al), None)
     if key == "physical-sciences" and meta.grade in ("7", "8", "9"):
         key = "natural-sciences"
-    return [*root_path(), meta.year or "Unknown Year", f"Grade {meta.grade}" if meta.grade else "Unknown Grade",
+    return [*root, meta.year or "Unknown Year", f"Grade {meta.grade}" if meta.grade else "Unknown Grade",
             SUBJECT_FOLDERS.get(key, subj or "Unknown Subject"), SESSION_FOLDERS.get(meta.session, "Misc"),
             PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
 
 
-def plan_uploads(s: PaperSet, jobs) -> List[dict]:
+def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
     """Every file for this set: {path, name, storage, mime, replace}."""
-    base = paper_folder(s.meta)
+    base = paper_folder(s.meta, root)
     n = s.meta.paper or "1"
     info = compute_links(jobs)
     by_id = {j.id: j for j in jobs}
@@ -222,12 +247,13 @@ async def run_send(set_id: str):
             raise RuntimeError("Google Drive is not connected")
         s = await load_set(set_id)
         jobs = await set_jobs(set_id)
-        items = plan_uploads(s, jobs)
+        root = await root_path()
+        items = plan_uploads(s, jobs, root)
         key = catalogue_key(s.meta)
         files = [i for i in items if i["name"]]
         await set_drive(set_id, status="uploading", uploaded=0, skipped=0, total=len(files) + bool(key), error=None)
-        w = DriveWriter(svc)
-        await asyncio.to_thread(w.folder, root_path())
+        w = DriveWriter(svc, root)
+        await asyncio.to_thread(w.folder, root)
         done = skipped = 0
         for it in items:
             if not it["name"]:
@@ -241,13 +267,13 @@ async def run_send(set_id: str):
         if key:
             entries = await catalogue_entries()
             wb = await asyncio.to_thread(build_workbook, key, entries[key])
-            await asyncio.to_thread(w.put, [*root_path(), "Catalogues"], CATALOGUES[key][0], wb,
+            await asyncio.to_thread(w.put, [*root, "Catalogues"], CATALOGUES[key][0], wb,
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", True)
             done += 1
-        folder_id = await asyncio.to_thread(w.folder, paper_folder(s.meta))
+        folder_id = await asyncio.to_thread(w.folder, paper_folder(s.meta, root))
         await set_drive(set_id, status="done", uploaded=done, skipped=skipped, error=None,
                         folder_url=f"https://drive.google.com/drive/folders/{folder_id}",
-                        folder_path="/".join(["My Drive", *paper_folder(s.meta)]), at=datetime.now(timezone.utc).isoformat())
+                        folder_path="/".join(["My Drive", *paper_folder(s.meta, root)]), at=datetime.now(timezone.utc).isoformat())
     except Exception as e:
         logger.exception("Drive upload failed")
         await set_drive(set_id, status="error", error=str(e)[:300])

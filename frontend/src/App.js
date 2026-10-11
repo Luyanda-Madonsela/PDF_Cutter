@@ -89,7 +89,7 @@ function App() {
           {set && <SetView set={set} onReset={() => setSet(null)} onSetChange={onSetChange} docHandlers={docHandlers} />}
         </div>
         <div className="lg:col-span-3 space-y-6">
-          <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} />
+          <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} onRefresh={reload} />
           <CataloguesPanel refreshKey={`${counts.done || 0}-${set?.status}`} />
         </div>
       </main>

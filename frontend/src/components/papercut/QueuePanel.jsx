@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Download, Trash2, Flag } from "lucide-react";
 import { setZipUrl } from "@/lib/api";
 import { DriveBadge } from "./DriveSet";
+import { RecropAllButton } from "./Recrop";
 import { PC } from "@/constants/testIds";
 
 export const SET_STATUS = {
@@ -37,12 +38,13 @@ const SetItem = ({ s, active, onSelect, onDelete }) => {
   );
 };
 
-export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete }) => {
+export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete, onRefresh }) => {
   const [filter, setFilter] = useState("all");
   const shown = sets.filter((s) => matches(s, filter));
   return (
     <aside data-testid={PC.historySection} className="pc-card p-5 pc-rise">
       <div className="pc-overline mb-3">Paper sets</div>
+      {(counts.done || 0) > 0 && <RecropAllButton onDone={onRefresh} />}
       <div data-testid={PC.queueCounts} className="grid grid-cols-5 gap-1 mb-4 font-mono text-center">
         {TILES.map(([k, l]) => (
           <div key={k} className="rounded bg-[var(--pc-surface2)] py-1.5">
