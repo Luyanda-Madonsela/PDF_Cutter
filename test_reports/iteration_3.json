@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 3 verified PaperCut v3 (marks + province + mask cropping). Updated /app/backend/tests/test_papercut_api.py to the new filename format `{order:03d}_{base}_Q{label}[_{marks}marks].png` and added 2 new tests (update_question_marks, patch_meta_canonicalises_province_and_session). 20/20 pytest cases pass against the live preview API in 243s. Frontend Playwright confirms: question-marks-{order} badges render ('7m','6m','3m'...), meta-bar chip row includes province (National), meta-dialog has meta-input-province, lightbox has question-marks-input + question-label-input + question-label-save-button (Save enables after edit). OCR (tesseract) on all 5 crops of latest sample_paper.pdf job: zero occurrences of 'QUESTION n' headings, 'VRAAG n', '[NN]' question totals, or 'TOTAL SECTION/:' lines — mask/exclude is working end-to-end. Sample paper marks across 3 recent runs: once produced perfect 7/6/3/2/4/3/3 (per spec); twice merged 1.1+1.2 to one block (marks=13=7+6 sum, so sum_marks still correct) and dropped 3.2 — AI variance acknowledged in spec ('AI may vary slightly'). base_name correctly becomes `Mathematics_Gr12_2024_Nov_National_P1`; memo appends `_MEMO`; PATCH with province='Gauteng' + session='June' canonicalises to GP + May/Jun and filenames rename to include `_GP_` and `_MayJun_`.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dialogs", "issues": ["(Carry-over from iter 2) Radix a11y warning: Missing Description or aria-describedby for DialogContent on meta-dialog & question-lightbox."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_papercut_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Observation, not a bug) AI occasionally merges 1.1+1.2 into a single 1.1 region (marks=13) and misses 3.2 for sample_paper.pdf. sum_marks keeps totals correct but the sub-question count drops from 7 to 5. If this is unacceptable, strengthen the segmentation prompt to force splitting at every 'N.M' sub-number even when they share a stem.",
+    "(Low) Add DialogDescription for a11y on meta & lightbox dialogs."
+  ],
+  "critical_code_review_comments": [
+    "jobs.py compute_base_name silently drops province from base_name when `canon_province` cannot match (returns the raw string); the raw string still goes through camel() so e.g. 'Mpumalanga Education' would end up as 'MpumalangaEducation'. Fine for the current prompt output but worth a defensive fallback to '' or 'National'.",
+    "jobs.py renumber: filename marks suffix uses `_{marks}marks` even when marks==0; depending on interpretation 0 may want to be treated as 'no marks'. Current behavior intentional per QuestionUpdate (clear_marks=true for None).",
+    "routes.py PATCH /jobs/{id}/meta still runs auto-pair on any meta field change — low risk, documented in iter 2.",
+    "ai.py SEGMENT_PROMPT sometimes merges consecutive sub-questions (observed 1.1+1.2 collapse). Consider adding an explicit rule: 'Always emit a separate segment for every distinct N.M label even when they share an intro'.",
+    "imaging.py apply_masks uses negative padding (x0-4, y0-3) which can go slightly outside page bounds — PIL silently clips, but worth clamping."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_papercut_api.py (new filename format assertions, +2 new tests: test_update_question_marks, test_patch_meta_canonicalises_province_and_session; 20 tests total)"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100%"},
+  "test_credentials": "N/A - no auth",
+  "seed_data_creation": "Each paired_jobs fixture leaves 2 new jobs. test_pair_with_forces_memo_and_delete_unpairs cleans up its own 2 jobs. DB now holds ~15 done sample_paper/memo jobs — safe to prune via DELETE /api/jobs/{id}.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression: `pytest /app/backend/tests/test_papercut_api.py -v` (~4 min due to 3 real AI jobs). New assertions rely on canonicalised province ('National') and session ('Nov') in meta. If sample_paper.pdf AI output changes, tolerate base_name='Mathematics_Gr12_2024_Nov_{province}_P1'. OCR check for mask-leakage was done via pytesseract (just installed) + /api/jobs/{id}/images/{qid}; reuse that pattern to re-verify after prompt tweaks. Frontend testids verified: question-marks-{order}, question-marks-input, question-label-save-button, meta-input-province.",
+  "rca_of_the_issue": "N/A — all requested features (new filename format with marks + province, mask-based exclusion of headings/totals, PATCH meta canonicalisation, PUT question marks/clear_marks, UI marks rendering & inputs) are working. Only observation: AI segmentation variance on sample_paper.pdf (merges 1.1+1.2 2 out of 3 runs). Not a code bug — a prompt tuning opportunity."
+}

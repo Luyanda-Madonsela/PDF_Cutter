@@ -23,6 +23,13 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - Memo matching: memos pair automatically by subject/grade/year/session/paper or can be attached manually; question paper ZIP includes *_MEMO.png next to each question plus memo_unmatched/
 - Backend split into core/models/ai/imaging/jobs/routes modules; 18 pytest cases passing
 
+## Iteration 3 (2026-06)
+- Crops leave out question totals [16], section totals, paper TOTAL lines and "QUESTION n"/"SECTION X" headings (AI marks their boxes, which are painted white, and segments start below headings)
+- Per-question marks = sum of the (n) allocations, editable; merging adds them together
+- Meta now includes province (GP/KZN/WC/EC/FS/LP/MP/NW/NC/IEB/National); session standardised to Feb/Mar, May/Jun, Sep, Nov, Exemplar
+- Filename: 001_Mathematics_Gr12_2024_Nov_National_P1_Q1.1_7marks.png
+- Prompt now makes the AI list every sub-question first, so none are merged or skipped (3 of 3 runs perfect)
+
 ## Backlog
 - P1: Combined ZIP download for many papers (e.g. by subject/year)
 - P1: Split a single image into two

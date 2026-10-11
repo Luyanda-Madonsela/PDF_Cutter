@@ -10,6 +10,7 @@ Find where every question/sub-question region starts and stops vertically on thi
 Rules:
 - Split at SUB-QUESTION level: e.g. 1.1, 1.2, 2.1 ... Deeper parts (1.1.1, 1.1.2, (a), (b)) stay INSIDE their parent sub-question region (1.1).
 - If a main question has no sub-questions, use the main number, e.g. "3".
+- NEVER merge or skip sub-questions: EVERY distinct sub-question number (1.1, 1.2, 1.3 ...) that starts on this page gets its OWN segment, even if they are short, share an intro, or sit close together. First list them all in "labels_on_page" (top to bottom), then output exactly one segment per listed label (plus an optional leading "CONTINUED" segment).
 - MAIN QUESTION HEADINGS MUST BE LEFT OUT: the heading line "QUESTION 1" / "VRAAG 1" (and "SECTION A" / "AFDELING A" headings) must NOT be inside any segment - start the segment just BELOW the heading. Any shared intro text, passage, diagram or table between the heading and the first sub-question belongs to the region of that FIRST sub-question.
 - Include diagrams, tables and answer options belonging to a sub-question in its region. Keep the per-item mark allocations in round brackets, e.g. (3).
 - "marks": the total marks for that sub-question = sum of all round-bracket mark allocations like (2), (3) inside the segment (including its deeper parts). Use null if none are visible. For memos use the marks shown for that sub-question.
@@ -21,7 +22,7 @@ Rules:
 - Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments must be in top-to-bottom order and not overlap. Each segment should extend down to just before the next segment starts.
 
 Respond with ONLY JSON, no markdown:
-{{"segments":[{{"label":"1.1","y_start":120,"y_end":340,"marks":7}}],"exclude":[[345,880,360,930]]}}"""
+{{"labels_on_page":["1.1","1.2"],"segments":[{{"label":"1.1","y_start":120,"y_end":340,"marks":7}},{{"label":"1.2","y_start":340,"y_end":420,"marks":3}}],"exclude":[[425,880,440,930]]}}"""
 
 MEMO_NOTE = """This page is from a MARKING GUIDELINE / MEMORANDUM. Each region is the answer and marking for one sub-question.
 Question numbers often appear in a left-hand column of a table; a region spans all table rows for that sub-question.

@@ -37,8 +37,8 @@ def stitch(parts: List[Image.Image]) -> Image.Image:
 def apply_masks(img: Image.Image, boxes) -> Image.Image:
     draw = ImageDraw.Draw(img)
     for y0, x0, y1, x1 in boxes:
-        draw.rectangle([img.width * (x0 - 4) / 1000, img.height * (y0 - 3) / 1000,
-                        img.width * (x1 + 4) / 1000, img.height * (y1 + 3) / 1000], fill="white")
+        draw.rectangle([img.width * max(0, x0 - 4) / 1000, img.height * max(0, y0 - 3) / 1000,
+                        img.width * min(1000, x1 + 4) / 1000, img.height * min(1000, y1 + 3) / 1000], fill="white")
     return img
 
 

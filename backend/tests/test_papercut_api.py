@@ -104,7 +104,11 @@ def test_meta_detected_and_base_name(paired_jobs):
     assert qp["meta"]["grade"] == "12"
     assert qp["meta"]["year"] == "2024"
     assert qp["meta"]["doc_type"] == "question_paper"
-    assert qp["base_name"] == "Mathematics_Gr12_2024_Nov_P1", qp["base_name"]
+    # province is now part of base_name and canonicalised to a code (e.g. 'National')
+    assert qp["meta"].get("province"), qp["meta"]
+    assert qp["meta"]["province"] in {"GP", "KZN", "WC", "EC", "FS", "LP", "MP", "NW", "NC", "IEB", "National"}
+    expected_base = f"Mathematics_Gr12_2024_Nov_{qp['meta']['province']}_P1"
+    assert qp["base_name"] == expected_base, qp["base_name"]
     assert memo["meta"]["doc_type"] == "memo"
     assert memo["base_name"].endswith("_MEMO")
 
@@ -124,9 +128,11 @@ def test_jobs_auto_paired(paired_jobs):
 def test_question_filename_format(paired_jobs):
     qp, _ = paired_jobs
     for q in qp["questions"]:
-        assert q["filename"].startswith(qp["base_name"] + "_")
+        # New format: {order:03d}_{base_name}_Q{label}[_{marks}marks].png
+        assert q["filename"].startswith(f"{q['order']:03d}_{qp['base_name']}_Q"), q["filename"]
         assert q["filename"].endswith(".png")
-        assert f"_{q['order']:03d}_Q" in q["filename"]
+        if q.get("marks") is not None:
+            assert f"_{q['marks']}marks.png" in q["filename"], q["filename"]
 
 
 def test_image_endpoint_by_qid(paired_jobs):
@@ -209,6 +215,53 @@ def test_update_question_invalid_parts(paired_jobs):
     assert r3.status_code == 400
 
 
+def test_update_question_marks(paired_jobs):
+    qp, _ = paired_jobs
+    q = qp["questions"][-1]
+    # Set marks explicitly
+    r = requests.put(f"{API}/jobs/{qp['id']}/questions/{q['id']}", json={"marks": 42})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    updated = next(x for x in body["questions"] if x["id"] == q["id"])
+    assert updated["marks"] == 42
+    assert "_42marks.png" in updated["filename"], updated["filename"]
+
+    # Clear marks
+    r2 = requests.put(f"{API}/jobs/{qp['id']}/questions/{q['id']}", json={"clear_marks": True})
+    assert r2.status_code == 200
+    updated2 = next(x for x in r2.json()["questions"] if x["id"] == q["id"])
+    assert updated2["marks"] is None
+    assert "marks.png" not in updated2["filename"], updated2["filename"]
+
+    # Restore original marks if present
+    if q.get("marks") is not None:
+        requests.put(f"{API}/jobs/{qp['id']}/questions/{q['id']}", json={"marks": q["marks"]})
+
+
+def test_patch_meta_canonicalises_province_and_session(paired_jobs):
+    qp, _ = paired_jobs
+    detail = requests.get(f"{API}/jobs/{qp['id']}").json()
+    meta = dict(detail["meta"])
+    orig_province = meta.get("province", "")
+    orig_session = meta.get("session", "")
+    meta["province"] = "Gauteng"
+    meta["session"] = "June"
+    r = requests.patch(f"{API}/jobs/{qp['id']}/meta", json=meta)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["meta"]["province"] == "GP", body["meta"]
+    assert body["meta"]["session"] == "May/Jun", body["meta"]
+    assert "_GP_" in body["base_name"], body["base_name"]
+    assert "_MayJun_" in body["base_name"], body["base_name"]
+    for q in body["questions"]:
+        assert "_GP_" in q["filename"] and "_MayJun_" in q["filename"]
+    # revert
+    meta["province"] = orig_province
+    meta["session"] = orig_session
+    requests.patch(f"{API}/jobs/{qp['id']}/meta", json=meta)
+
+
+
 # ---------- meta patch (destructive to pair_map) : do last-ish ----------
 def test_patch_meta_renames_filenames(paired_jobs):
     qp, _ = paired_jobs
@@ -286,6 +339,7 @@ def test_merge_next_and_delete_question(paired_jobs):
     # orders should be sequential 1..N
     orders = [q["order"] for q in after["questions"]]
     assert orders == list(range(1, len(orders) + 1))
-    # filenames reflect order
+    # filenames reflect order (new format: 001_base_Q...)
     for q in after["questions"]:
-        assert f"_{q['order']:03d}_Q" in q["filename"]
+        assert q["filename"].startswith(f"{q['order']:03d}_"), q["filename"]
+        assert "_Q" in q["filename"]
