@@ -1,0 +1,38 @@
+{
+  "summary": "Backend (9/9 pytest) and frontend flows for PaperCut all pass. Full lifecycle verified: upload PDF -> AI processing -> 7 question images detected -> images endpoint -> ZIP download -> list -> soft delete. Frontend: dropzone upload, progress card, results, lightbox, download, new PDF reset, history item reopen & delete all work. One concern: external object-storage service (integrations.emergentagent.com/objstore) returned 500 intermittently during one upload run causing a job to error out; the UI surfaced the error correctly. A retry on the next upload succeeded. No code bug - but backend has no retry on 5xx storage writes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "process_job -> put_object", "issue": "External storage service intermittently returns 500. _storage_call only retries on 404 (storage key refresh). Consider adding exponential backoff retry on 5xx to improve reliability when the Emergent object store hiccups."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_papercut_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Low priority) Add retry on 5xx in backend/server.py `_storage_call` to handle intermittent storage 500s. Current behavior leaves the job in `error` state and the user must re-upload."
+  ],
+  "critical_code_review_comments": [
+    "server.py `_storage_call` only retries on 404 (for key refresh). A single 5xx from the object store aborts the entire job after minutes of AI work. Add retry with backoff on 5xx.",
+    "`page_cache` in process_job keeps all rendered pages in memory at RENDER_ZOOM=2.5; fine for 3 pages but may OOM for 20+ page papers.",
+    "No file-size limit on /api/jobs upload - a malicious client could upload a huge PDF.",
+    "Startup migration marks ALL queued/processing jobs as error on every restart; fine with current single-instance deploy but will cause issues in multi-replica.",
+    "detect_segments uses a per-page LlmChat; with large papers (20+ pages) the sequential AI calls (bounded by sem=6) can take minutes - no client-side total ETA shown."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_papercut_api.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "N/A - no auth",
+  "seed_data_creation": "Backend tests create+delete a job each run (self-cleaning via soft delete).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend endpoints verified via pytest at /app/backend/tests/test_papercut_api.py (9 tests, all pass, ~13s with real AI). Frontend verified via Playwright: upload -> process -> results -> lightbox -> history reopen -> delete. Note: the Emergent object storage service occasionally returns 500 on PUT; backend has no 5xx retry, so during flaky periods uploads will error out. The UI correctly surfaces this. For reproduction use /app/tests/sample_paper.pdf (3-page sample paper). Expected ~7 questions (1.1,1.2,1.3,2.1,2.2,3.1,3.2), AI labels may vary slightly.",
+  "rca_of_the_issue": "Intermittent processing failure RCA: External storage endpoint https://integrations.emergentagent.com/objstore/api/v1/storage/objects/... returned HTTP 500 during put_object() in process_job. Code path: _storage_call() -> resp.raise_for_status() propagated the exception, caught in process_job which marked job status=error. Mitigation: add retry-with-backoff for 5xx responses in _storage_call similar to the existing 404 retry."
+}

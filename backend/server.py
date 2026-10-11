@@ -12,6 +12,7 @@ import asyncio
 import logging
 import zipfile
 import uuid
+import time
 import requests
 from pathlib import Path
 from typing import List, Optional, Annotated, Any
@@ -51,12 +52,22 @@ def init_storage(force: bool = False):
     return storage_key
 
 
-def _storage_call(method: str, path: str, **kw):
-    for force in (False, True):
-        resp = requests.request(method, f"{STORAGE_URL}/objects/{path}",
-                                headers={"X-Storage-Key": init_storage(force), **kw.pop("headers", {})}, timeout=120, **kw)
-        if resp.status_code != 404 or force:
-            break
+def _storage_call(method: str, path: str, headers: Optional[dict] = None, **kw):
+    force = False
+    for attempt in range(5):
+        try:
+            resp = requests.request(method, f"{STORAGE_URL}/objects/{path}",
+                                    headers={"X-Storage-Key": init_storage(force), **(headers or {})}, timeout=120, **kw)
+        except requests.RequestException:
+            time.sleep(2 ** attempt)
+            continue
+        if resp.status_code == 404 and not force:
+            force = True
+            continue
+        if resp.status_code >= 500:
+            time.sleep(2 ** attempt)
+            continue
+        break
     resp.raise_for_status()
     return resp
 
@@ -238,6 +249,9 @@ async def process_job(job_id: str, pdf_bytes: bytes):
         questions = []
         seen = {}
         for idx, g in enumerate(groups, start=1):
+            first_page = g["parts"][0][0]
+            for k in [k for k in page_cache if k < first_page]:
+                del page_cache[k]
             parts = []
             for p, y0, y1 in g["parts"]:
                 im = page_img(p)
