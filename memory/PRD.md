@@ -79,3 +79,17 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - P0 User adds the redirect URI in Google Cloud, connects Drive, and checks the first real upload
 - P1 Fix the 4 old pytest cases that depend on a seeded set changed by an earlier test
 - P2 Let the Drive root path be changed in the UI
+
+## Iterations 8-10 (2026-06)
+- Drive main folder can be a pasted Drive folder link (default: Past Paper Database 1Rbo3-EfjwO3mufbN12jU514FPfd9ur2i) plus a sub-folder ("CAPS & IEB Past Papers"). Set in the Drive settings dialog. Paths use "id:<folder>"
+- Import from Drive ("From Drive" tab, drive_import.py): search all PDFs by name and import the ticked ones, or scan & import unsplit PDFs (limit 50-1000). Imported jobs keep drive_source, so images go back to the original paper folder and the PDF isn't uploaded again. PDFs the app uploads are tagged appProperties papercut=1 so the scan skips them
+- Re-crop: per set, or for all done sets (warning shows how many have manual edits). Afterwards the set re-uploads to Drive
+- Undo crop: step-by-step undo inside the editor, plus server-side crop_history (20) and "Restore previous crop" (POST /undo-crop)
+- Manual erase boxes can be moved and resized (8 handles)
+- Drive OAuth uses login_hint (GOOGLE_DRIVE_ACCOUNT=luyandasmadonselageneral@gmail.com) and prompt=select_account consent
+- AI settings (llm.py, header model badge): Emergent / Gemini / OpenAI / Anthropic / OpenRouter / OpenAI-compatible URL, with the user's own key (stored masked). Falls back to the Emergent key when the chosen provider has no key. POST /api/ai/test
+- Tests: iteration_8, 9 and 10 all pass
+
+## Blockers / next
+- The user must add the redirect URI https://papercut-sa.preview.emergentagent.com/api/drive/callback under "Authorised redirect URIs" (currently empty) and add luyandasmadonselageneral@gmail.com as a test user. Then do the first real Drive upload and import
+- P1: fix the 3 old seed-drift pytest cases

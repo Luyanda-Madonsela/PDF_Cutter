@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 10: tested configurable AI provider settings (Emergent/Gemini/OpenAI/Anthropic/OpenRouter/compatible), key masking, fallback-to-Emergent behavior, /ai/test (real Gemini call returning 1.1), compatible-URL failure path, and /drive/connect login_hint + prompt=select_account consent. Backend: 11/11 new tests pass. Regression (test_iter9 + test_auth): 45 passed, 0 failed (fixed a pre-existing PYTHONPATH bug in test_iter9 subprocess helper). Frontend: AiBadge opens dialog, 6 providers listed, provider-specific inputs appear/hide correctly, Save toast fires, Save & Test with Emergent succeeds. Settings restored to {provider:emergent, keys cleared}.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter10.py",
+    "/app/test_reports/pytest/iter10_results.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Minor spec/code mismatch: review request mentions data-testid 'model-badge' but actual id is 'ai-model-badge' (constants/testIds/papercut.js). Both work; just note the spec wording.",
+    "llm.resolve(): when provider=='compatible' with no key, cfg['key']='none' is sent to AsyncOpenAI; fine for servers that don't need auth but could be clearer as empty string.",
+    "ai_settings default base_url is '' but current DB has 'http://127.0.0.1:9/v1' leftover from prior tests of compatible provider. Not restored by this suite since base_url is only overwritten when provider=='compatible' is PUT. Harmless (unused unless compatible chosen) but worth clearing if truly a reset is desired."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter10.py (new)",
+    "/app/backend/tests/test_iter9.py (added PYTHONPATH env to subprocess call so TestUndoCrop runs)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "cookie session_token=test_session_qa_papercut (also usable as Authorization: Bearer)",
+  "seed_data_creation": "none; test_iter10 cleans up fake keys and restores provider=emergent in a module-scope fixture",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "AI provider state must be left as provider=emergent with all keys cleared for real processing to work. iter10 fixture handles this. Compatible base_url field is not cleared (default '' not forced). Drive OAuth URL always includes login_hint=luyandasmadonselageneral@gmail.com and prompt=select_account+consent.",
+  "rca of the issue": "N/A - no bugs found in iteration 10 scope"
+}

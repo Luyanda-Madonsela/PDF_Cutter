@@ -159,7 +159,7 @@ def test_root_path_and_plan_base_drive_source():
 # ---------------- Undo-crop on cloned set ----------------
 @pytest.fixture(scope="module")
 def cloned_set():
-    out = subprocess.run([sys.executable, "tests/clone_set.py"], capture_output=True, text=True, cwd="/app/backend")
+    out = subprocess.run([sys.executable, "tests/clone_set.py"], capture_output=True, text=True, cwd="/app/backend", env={**os.environ, "PYTHONPATH": "/app/backend"})
     assert out.returncode == 0, out.stderr
     sid = out.stdout.strip().splitlines()[-1]
     yield sid
