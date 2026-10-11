@@ -63,3 +63,19 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 ## Backlog
 - P0 Google Drive upload (waiting on keys)
 - P1 Excel CAPS/IEB check; older sets still have old topic names (e.g. 'Patterns')
+
+## Iteration 7 (2026-06)
+- Excel: every block uses the canonical CAPS topic columns (backend/syllabus.py CANON/RENAMES; scripts/normalize_catalogues.py). Question cells use one format: Q1, Q1.2, Q6.1-6.4, Q9(a), '-'. No data was lost. Backups are in /app/memory/catalogues_backup_*
+- Rows for exams that were never written are greyed out (fill FFD9D9D9, scripts/grey_catalogues.py): years after 2026, Sept/Nov 2026, May/Jun 2020 (except DBE Gr12), IEB outside Gr12 Nov, DBE Gr12 Sept, DBE Gr12 Feb/Mar from 2018, and DBE Gr7-11 outside Nov. Rows that already hold data are never greyed. locate() refuses greyed rows
+- Rules dropped because the user's own data contradicts them: single-paper Gr7-9, and "provincial Feb/Mar doesn't exist" (KZN has Feb/Mar papers)
+- Topic Refresh: POST /api/catalogues/refresh-topics plus a button in the catalogues panel
+- Manual erase: drag boxes in the Erase tab (always visible). Stored in erase_manual and validated against the crop
+- Memo/addendum/errata images can be edited (Erase, Adjust crop) from the question popup. Rename, merge and delete on the question paper are copied to the linked memo (and to addendum/errata images with the same label)
+- Answer spaces (lines, boxes, grids) are cut out of question crops (QP prompt answer_spaces plus ai.cut_bands)
+- Google Drive (drive.py): one shared OAuth connection (db.drive_credentials _id=shared). Sends automatically when a set is done with no pending erases (once), and has a manual Send/Send again button. Badges show in the set header and queue. Catalogue xlsx goes to <root>/Catalogues
+- Tests: iteration_7 is 20/20 new; frontend passes; sync tested by hand on a cloned set. The real Drive upload is untested until the user connects
+
+## Backlog
+- P0 User adds the redirect URI in Google Cloud, connects Drive, and checks the first real upload
+- P1 Fix the 4 old pytest cases that depend on a seeded set changed by an earlier test
+- P2 Let the Drive root path be changed in the UI
