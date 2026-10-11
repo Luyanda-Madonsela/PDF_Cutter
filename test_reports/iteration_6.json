@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 6 adds Emergent Google auth gating on all /api/* except /api/auth/*. Wrote new /app/backend/tests/test_auth.py (14 tests, 100% pass) covering: unauth 401 on 8 protected paths incl. /api/, /api/sets, /api/catalogues, /api/sets/{id}, /api/sets/{id}/zip, /api/jobs/{id}/images/{qid}, /api/jobs/{id}/pages/{p}, /api/catalogues/{key}/download; /api/auth/me 401 unauth; Bearer header valid returns QA user; cookie session_token works equivalently; invalid Bearer -> 401; POST /api/auth/session with bogus session_id -> 401; POST /api/auth/logout on a throwaway session (seeded in mongo) deletes it from DB, invalidates the token (subsequent /me -> 401) while the shared QA token remains valid; image endpoint returns 401 (not 404) when unauth so <img> tags fail fast. Patched /app/backend/tests/test_papercut_api.py to inject Authorization: Bearer <QA_TOKEN> via a lightweight requests.request monkey-patch (all 46 pre-existing tests now hit the gated API); 42/46 pass. Frontend Playwright: without cookie, auth-login-screen + auth-google-signin-button render; signIn() redirects to https://auth.emergentagent.com/?redirect=<origin>/ (verified in source /app/frontend/src/components/papercut/AuthGate.jsx line 18-19). With cookie session_token=test_session_qa_papercut, workspace loads, auth-user-menu + auth-user-name='QA Tester' visible, Mathematics_Gr12_2024_Nov_National_P1 set opens, question image /api/jobs/.../images/... renders (cookie sent on <img>), catalogue download /api/catalogues/gr12-maths/download returns 200 xlsx. With a throwaway cookie, clicking auth-logout-button clears the server-side session and returns to login screen; QA shared session remains valid.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/sets/{id} (seeded)", "issue": "Pre-existing seed drift (unrelated to auth): seeded Mathematics_Gr12_2024_Nov_National_P1 set now has only 1-3 questions (down from 7) because iteration 5's test_merge_next_and_delete_question destructively mutates the shared seeded set each run. Causes test_set_detail_structure/test_expected_links/test_set_zip_filenames_width/test_seeded_qp_questions_have_topic_from_catalogue to fail. Also Q1.1 topic is now 'Patterns' which is not in the current catalogue topics list ('Number Patterns, Sequences & Series' is the current entry). Not auth-related; carry-over from iter 5."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_auth.py",
+    "/app/backend/tests/test_papercut_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Pre-existing, not iteration 6) Make test_merge_next_and_delete_question non-destructive OR mark it with pytest.mark.last/skip in regressions. The seeded set is now functionally damaged (1 QP question remaining) and future tests that assume 7 questions will keep failing. Options: (a) re-seed before running, (b) use a dedicated throwaway bulk set for the merge/delete test, (c) revert both edits at the end of the test.",
+    "(Low) Re-seed Q1.1 topic to a valid catalogue topic ('Number Patterns, Sequences & Series' or 'Algebra, Equations & Inequalities') so test_seeded_qp_questions_have_topic_from_catalogue passes.",
+    "(Nice-to-have) auth.py require_user is called twice for /api/auth/me (once as router dep via auth_api... actually no, auth_api has no dependency; only `me` manually re-invokes require_user). Fine as is. Just noting: GET /api/auth/me currently 200 via the manual call — correct.",
+    "(Nice-to-have) The /api/auth/* router has no auth gating on /logout — fine (idempotent, token-presence-driven), but could reject missing token with 401 for symmetry. Current behaviour: no token -> deletes nothing, returns 200 {ok:true}. Not a security issue but a tiny inconsistency."
+  ],
+  "critical_code_review_comments": [
+    "auth.py: expires_at comparison correctly handles naive->UTC coercion. Good.",
+    "auth.py create_session: on-login upserts user; INSERTs a new session row every call even if same session_token already exists -> duplicate session rows if the exchange is re-run. Consider upsert on {session_token}. Minor.",
+    "auth.py logout: calls response.delete_cookie with secure=True, samesite='none', path='/' matching set_cookie -> cookie actually clears in browser. Good.",
+    "routes.py line 16: api router has dependencies=[Depends(require_user)] — clean single point of enforcement for all /api/* non-auth routes. Good.",
+    "AuthGate.jsx inCallback branch uses location.hash.includes('session_id='); if the Emergent redirect ever moves to a query string instead of hash, this breaks silently. Low risk.",
+    "AuthGate.jsx getMe failure path sets user=false which shows login screen — correct; but 401 is logged as a console error (visible to users opening DevTools). Could suppress with axios interceptor returning null for /auth/me 401.",
+    "lib/api.js axios.defaults.withCredentials=true — correct for cookie-based auth across the preview domain.",
+    "No per-user filtering on /api/sets or /api/catalogues (by design per the problem statement: shared library). Verified in list_sets() and catalogue_entries() — no user_id filter. OK.",
+    "Image endpoint /api/jobs/{id}/images/{qid} inherits the router-level auth dependency, so <img> tags DO send the httpOnly cookie (same-origin preview). Verified in Playwright run (naturalWidth > 0)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_auth.py (NEW - 14 tests for the auth gate)",
+    "/app/backend/tests/test_papercut_api.py (added module-level requests monkey-patch to inject Bearer header so pre-existing suite runs against gated API)"
+  ],
+  "success_rate": {"backend": "100% (14/14 auth) + 91% (42/46 papercut, 4 pre-existing seed-drift failures)", "frontend": "100% (login screen, redirect href, workspace, user menu w/ name, set detail, cookie-auth'd images, catalogue download, logout)"},
+  "test_credentials": "QA Bearer / cookie session_token: test_session_qa_papercut (user test-user-qa, email qa.tester@example.com, name 'QA Tester'). Seeded in mongo test_database users + user_sessions.",
+  "seed_data_creation": "test_auth::throwaway_session fixture inserts a TEST_throwaway_<hex> session per test and deletes it on teardown. One leftover TEST_fe_logout_* session is still in mongo from the Playwright logout step (its token is already deleted server-side by the logout call, so harmless; the mongo doc is gone post-logout).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python3 -m pytest tests/test_auth.py tests/test_papercut_api.py -n 0 --junitxml=/app/test_reports/pytest/pytest_results.xml (~85s). Expect 14/14 auth pass, 42/46 papercut pass; the 4 papercut failures are pre-existing seed drift (not auth), see action items. For UI testing just add cookie session_token=test_session_qa_papercut (domain papercut-sa.preview.emergentagent.com, httpOnly, secure, sameSite=None, path=/). AuthGate testids: auth-login-screen, auth-google-signin-button, auth-user-menu, auth-user-name, auth-logout-button, auth-loading. Note: iter 5's merge/delete test has permanently damaged the single seeded set — if main agent re-seeds the paper, re-run iteration 5+6 regressions.",
+  "rca_of_the_issue": "N/A — all requested auth-gating features (unauth 401, cookie+Bearer parity, invalid-session 401, logout flow, frontend AuthGate + UserMenu + logout button, cookie sent on <img>, catalogue download under auth) are implemented and verified. The 4 pre-existing papercut failures RCA: shared seeded set + non-idempotent merge/delete test from iter 5 — fix is to make that test self-reverting OR skip it in regression."
+}

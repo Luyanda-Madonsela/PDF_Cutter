@@ -35,6 +35,18 @@ def _load_frontend_env():
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _load_frontend_env() or "").rstrip("/")
 assert BASE_URL, "REACT_APP_BACKEND_URL not configured"
 API = f"{BASE_URL}/api"
+
+# Auth: whole app is gated. Monkey-patch requests module-level verbs to send Bearer header.
+QA_TOKEN = os.environ.get("PAPERCUT_QA_TOKEN", "test_session_qa_papercut")
+_AUTH_HEADERS = {"Authorization": f"Bearer {QA_TOKEN}"}
+_orig_request = requests.request
+def _auth_request(method, url, **kw):
+    headers = kw.pop("headers", None) or {}
+    merged = {**_AUTH_HEADERS, **headers}
+    return _orig_request(method, url, headers=merged, **kw)
+requests.request = _auth_request
+for _v in ("get", "post", "put", "patch", "delete"):
+    setattr(requests, _v, lambda url, _m=_v, **kw: _auth_request(_m, url, **kw))
 SAMPLE_PAPER = "/app/tests/sample_paper.pdf"
 SAMPLE_MEMO = "/app/tests/sample_memo.pdf"
 SAMPLE_ADDENDUM = "/app/tests/sample_addendum.pdf"

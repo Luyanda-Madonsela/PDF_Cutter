@@ -43,3 +43,23 @@ Gemini 3 Flash (Emergent Universal Key); split down to sub-questions (1.1, 1.2);
 - P1: Combined ZIP download for many papers (e.g. by subject/year)
 - P1: Split a single image into two
 - P2: Upload size limit; more than one worker for higher throughput
+
+## Iteration 6 (2026-06): Google sign-in
+- Emergent-managed Google sign-in locks the whole app (all /api/* except /api/auth/* need a session cookie or Bearer token). Everyone shares one library.
+- backend/auth.py: /api/auth/session, /me, /logout. Collections: users, user_sessions
+- Frontend: AuthGate (login screen, callback) and UserMenu in the header
+- Tests: auth 14/14, frontend flows pass. 4 older pytest cases fail because a merge/delete test changes the shared seeded set (test data only)
+
+## Drive plan (waiting on the user's OAuth Client ID and Secret)
+- Root: My Drive/Fundani Group (Holdings Company)/ResourceWiz Inc/Past Paper Database/CAPS & IEB Past Papers/
+- Path: {Year}/Grade {N}/{Subject}/{Session: Feb-Mar|May-Jun|Sept|Nov|Misc}/{Province: DBE|EC|FS|GP|IEB|KZN|LIM|MP|NW|WC}/
+  - PDFs go in Paper_N/, Memo_Paper_N/, Addendum/, Errata/ (skip if already there)
+  - Images go in Questions/Paper_N/Question_{main no.}/{Question,Memo,Addendum,Errata}/ (Hints/ and Video/ are left alone). Replace files with the same name
+  - Catalogues go in CAPS & IEB Past Papers/Catalogues/
+- Map National to DBE, LP to LIM, Sep to Sept. Create missing folders
+- Upload automatically when a set is finalised, plus a manual "Send to Drive" button. Keep the ZIP
+- OAuth redirect: https://papercut-sa.preview.emergentagent.com/api/drive/callback, scope drive
+
+## Backlog
+- P0 Google Drive upload (waiting on keys)
+- P1 Excel CAPS/IEB check; older sets still have old topic names (e.g. 'Patterns')
