@@ -5,22 +5,12 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
+import { LinkedList } from "./LinkedEditor";
 import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const ImgBox = ({ src, alt }) => (
   <div className="max-h-[60vh] overflow-auto rounded-md bg-white"><img src={src} alt={alt} className="w-full" /></div>
-);
-
-const RefList = ({ refs }) => (
-  <div className="space-y-4 max-h-[60vh] overflow-auto">
-    {refs.map((r) => (
-      <div key={r.qid}>
-        <p className="text-xs font-mono text-[var(--pc-muted)] mb-1">For Q{r.label}</p>
-        <div className="rounded-md bg-white"><img src={imageUrl(r.job_id, r.qid)} alt={r.label} className="w-full" /></div>
-      </div>
-    ))}
-  </div>
 );
 
 const FlagBox = ({ flags, onReview }) => (
@@ -31,7 +21,7 @@ const FlagBox = ({ flags, onReview }) => (
   </div>
 );
 
-export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics }) => {
+export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, documents = [] }) => {
   const idx = doc ? doc.questions.findIndex((q) => q.id === qid) : -1;
   const q = idx >= 0 ? doc.questions[idx] : null;
   const [label, setLabel] = useState("");
@@ -69,18 +59,16 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics })
                 {link?.memo && <TabsTrigger data-testid={PC.tabPartner} value="memo">Memo</TabsTrigger>}
                 {link?.addenda?.length > 0 && <TabsTrigger data-testid="lightbox-tab-addendum" value="addendum">Addendum ({link.addenda.length})</TabsTrigger>}
                 {link?.errata?.length > 0 && <TabsTrigger data-testid="lightbox-tab-errata" value="errata">Errata ({link.errata.length})</TabsTrigger>}
-                {q.erase_status !== "none" && <TabsTrigger data-testid="lightbox-tab-erase" value="erase">Erase{q.erase_status === "pending" ? " (needs approval)" : ""}</TabsTrigger>}
+                <TabsTrigger data-testid="lightbox-tab-erase" value="erase">Erase{q.erase_status === "pending" ? " (needs approval)" : ""}</TabsTrigger>
                 <TabsTrigger data-testid={PC.tabAdjust} value="adjust">Adjust crop</TabsTrigger>
               </TabsList>
               <TabsContent value="question"><ImgBox src={imageUrl(doc.id, q.id) + v} alt={q.label} /></TabsContent>
-              {link?.memo && <TabsContent value="memo"><ImgBox src={imageUrl(link.memo.job_id, link.memo.qid)} alt="memo" /></TabsContent>}
-              {link?.addenda?.length > 0 && <TabsContent value="addendum"><RefList refs={link.addenda} /></TabsContent>}
-              {link?.errata?.length > 0 && <TabsContent value="errata"><RefList refs={link.errata} /></TabsContent>}
-              {q.erase_status !== "none" && (
-                <TabsContent value="erase">
-                  <EraseReview doc={doc} q={q} onDecide={(boxes) => act(() => decideErase(doc.id, q.id, boxes), boxes.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
-                </TabsContent>
-              )}
+              {link?.memo && <TabsContent value="memo"><LinkedList refs={[link.memo]} kind="memo" documents={documents} onSetChange={onSetChange} /></TabsContent>}
+              {link?.addenda?.length > 0 && <TabsContent value="addendum"><LinkedList refs={link.addenda} kind="addendum" documents={documents} onSetChange={onSetChange} /></TabsContent>}
+              {link?.errata?.length > 0 && <TabsContent value="errata"><LinkedList refs={link.errata} kind="errata" documents={documents} onSetChange={onSetChange} /></TabsContent>}
+              <TabsContent value="erase">
+                <EraseReview doc={doc} q={q} onDecide={(boxes, manual) => act(() => decideErase(doc.id, q.id, boxes, manual), boxes.length + manual.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
+              </TabsContent>
               <TabsContent value="adjust">
                 <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
                   onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))} />

@@ -1,11 +1,13 @@
 import { LogOut } from "lucide-react";
 import { useAuth } from "./AuthGate";
+import { DriveConnect } from "./DriveConnect";
 import { AUTH } from "@/constants/testIds";
 
 export const UserMenu = () => {
   const { user, signOut } = useAuth();
   return (
     <div data-testid={AUTH.userMenu} className="flex items-center gap-2 shrink-0">
+      <DriveConnect />
       {user.picture
         ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full border border-[var(--pc-border)]" />
         : <div className="h-8 w-8 rounded-full bg-[var(--pc-surface2)] grid place-items-center text-xs font-bold">{user.name?.[0]}</div>}

@@ -19,13 +19,14 @@ Rules:
 - NEVER merge or skip sub-questions: EVERY distinct sub-question number that starts on this page gets its OWN segment. First list them all in "labels_on_page" (top to bottom), then output exactly one segment per listed label (plus an optional leading "CONTINUED" segment).
 - Headings "QUESTION 1" / "VRAAG 1" and "SECTION A" / "AFDELING A" (+ section instructions) are NOT part of any segment: start the segment just BELOW them. Shared intro text, passages, diagrams or tables between the heading and the first sub-question belong to that FIRST sub-question.
 - Include diagrams, tables and answer options belonging to a sub-question. Keep round-bracket mark allocations like (3).
+- ANSWER SPACES must be LEFT OUT of the crop: ruled/dotted writing lines (______ or ......), empty answer boxes/frames, blank grids or tables the candidate must fill in, "Answer:" / "Antwoord:" blanks, and empty space reserved for working. End a segment ABOVE answer space at its bottom, and list every answer-space band (also ones between deeper parts like 1.1.1 and 1.1.2) in "answer_spaces" as [y_start, y_end]. Multiple-choice options, printed diagrams, given tables and graphs are NOT answer spaces.
 - "marks": total marks for that sub-question = sum of all round-bracket allocations like (2), (3) in it (including deeper parts). null if none visible.
 - ERASE via "exclude": (1) the sub-question's OWN number printed at its start (e.g. the "1.1" before the text; NOT the deeper 1.1.1 / (a) numbers); (2) "QUESTION n"/"VRAAG n"/"SECTION X" headings; (3) square-bracket question totals like [16]; (4) section totals like "TOTAL SECTION A: 50"; (5) paper totals like "TOTAL: 150" / "GRAND TOTAL". Segments should end above totals where possible.
 """ + COMMON_RULES + """
 - If the page has no questions (cover, instructions, information/formula sheet, blank page, answer sheet), return empty lists.
 
 Respond with ONLY JSON, no markdown:
-{"labels_on_page":["1.1","1.2"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null},{"label":"1.2","y_start":340,"y_end":420,"marks":3,"review":null}],"exclude":[[122,60,135,95],[425,880,440,930]]}"""
+{"labels_on_page":["1.1","1.2"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null},{"label":"1.2","y_start":340,"y_end":420,"marks":3,"review":null}],"exclude":[[122,60,135,95],[425,880,440,930]],"answer_spaces":[[250,290]]}"""
 
 MEMO_PROMPT = """You are analysing ONE page image from a South African high school exam MARKING GUIDELINE / MEMORANDUM.
 Find where the answer/marking region for every sub-question starts and stops vertically on this page.
@@ -139,7 +140,20 @@ async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=N
                         "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None,
                         "topic": str(s["topic"]).strip() if s.get("topic") else None})
     excl = [[max(0, min(1000, int(v))) for v in b] for b in data.get("exclude", []) if isinstance(b, list) and len(b) == 4]
-    return sorted(out, key=lambda s: s["y0"]), excl
+    bands = [(int(b[0]), int(b[1])) for b in data.get("answer_spaces", []) if isinstance(b, list) and len(b) == 2 and int(b[1]) > int(b[0])]
+    return cut_bands(sorted(out, key=lambda s: s["y0"]), bands), excl
+
+
+def cut_bands(segs: list, bands: list) -> list:
+    """Remove answer-space bands from segments; the pieces keep the label so they stitch back together."""
+    out = []
+    for s in segs:
+        pieces = [(s["y0"], s["y1"])]
+        for b0, b1 in sorted(bands):
+            pieces = [q for a, z in pieces for q in ((a, min(z, b0)), (max(a, b1), z)) if q[1] - q[0] > 5] if any(a < b1 and b0 < z for a, z in pieces) else pieces
+        for i, (a, z) in enumerate(pieces):
+            out.append({**s, "y0": a, "y1": z, **({} if i == 0 else {"marks": None, "review": None})})
+    return out
 
 
 async def detect_meta(img_b64: str, session_id: str) -> dict:

@@ -4,6 +4,7 @@ import { QuestionCard } from "./QuestionCard";
 import { QuestionDialog } from "./QuestionDialog";
 import { MetaEditor } from "./MetaEditor";
 import { DocumentsPanel } from "./DocumentsPanel";
+import { DriveSetPanel } from "./DriveSet";
 import { SET_STATUS } from "./QueuePanel";
 import { setZipUrl, DOC_LABEL, approveAllErases } from "@/lib/api";
 import { toast } from "sonner";
@@ -36,6 +37,7 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
             <MetaEditor set={set} onSetChange={onSetChange} />
           </div>
           <CatalogueLine cat={set.catalogue} />
+          <div className="mt-3"><DriveSetPanel set={set} onSetChange={onSetChange} /></div>
         </div>
         <div className="flex gap-3 flex-wrap shrink-0">
           <button data-testid={PC.newPdfButton} onClick={onReset} className="pc-btn-secondary"><Plus className="h-4 w-4" /> Upload more</button>
@@ -94,7 +96,7 @@ export const SetView = ({ set, onReset, onSetChange, docHandlers }) => {
           ))}
         </div>
       ))}
-      <QuestionDialog topics={set.catalogue?.topics || []} doc={openDoc} qid={open?.qid} link={openDoc?.meta.doc_type === "question_paper" ? set.links[open?.qid] : null}
+      <QuestionDialog topics={set.catalogue?.topics || []} doc={openDoc} qid={open?.qid} documents={set.documents} link={openDoc?.meta.doc_type === "question_paper" ? set.links[open?.qid] : null}
         onClose={() => setOpen(null)} onSetChange={onSetChange} />
     </section>
   );

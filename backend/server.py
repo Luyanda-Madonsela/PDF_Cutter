@@ -5,10 +5,12 @@ from starlette.middleware.cors import CORSMiddleware
 from core import client, db, init_storage, logger
 from routes import api
 from auth import auth_api
+from drive import drive_api
 from jobs import worker_loop
 
 app = FastAPI()
 app.include_router(auth_api)
+app.include_router(drive_api)
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +34,8 @@ async def startup():
     await db.users.create_index("email")
     await db.jobs.update_many({"status": "classifying"}, {"$set": {"status": "queued"}})
     await db.jobs.update_many({"status": "processing"}, {"$set": {"status": "ready"}})
+    await db.sets.update_many({"drive.status": {"$in": ["queued", "uploading"]}},
+                              {"$set": {"drive.status": "error", "drive.error": "Interrupted by a server restart. Send again."}})
     app.state.worker = asyncio.create_task(worker_loop())
 
 

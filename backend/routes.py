@@ -11,7 +11,8 @@ from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TY
 from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
-                  erase_proposals, ERASE_FLAG)
+                  erase_proposals, ERASE_FLAG, match_topic)
+from syllabus import rename
 
 api = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
 JOB_EXCLUDE = {"page_paths", "page_masks"}
@@ -185,6 +186,32 @@ async def catalogue_entries() -> dict:
     return out
 
 
+@api.post("/catalogues/refresh-topics")
+async def refresh_topics():
+    """Move stored question topics onto the current catalogue column names."""
+    changed = cleared = 0
+    sets = [PaperSet.from_mongo(d) for d in await db.sets.find({"is_deleted": False}).to_list(20000)]
+    for s in sets:
+        key = catalogue_key(s.meta)
+        topics = locate(s.meta).get("topics", []) if key else []
+        for job in await set_jobs(s.id):
+            if job.meta.doc_type != "question_paper":
+                continue
+            dirty = False
+            for q in job.questions:
+                if not q.topic or q.topic in topics:
+                    continue
+                new = match_topic(rename(key, q.topic), topics)
+                changed, cleared = changed + bool(new), cleared + (not new)
+                q.topic = new
+                if not new and "Topic not set" not in q.flags:
+                    q.flags.append("Topic not set")
+                dirty = True
+            if dirty:
+                await save_job(job)
+    return {"updated": changed, "cleared": cleared}
+
+
 @api.get("/catalogues")
 async def list_catalogues():
     entries = await catalogue_entries()
@@ -263,7 +290,11 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
     require_done(job)
     idx = find_idx(job, qid)
     q = job.questions[idx]
-    if body.label is not None and body.label.strip():
+    if body.label is not None and body.label.strip() and body.label.strip() != q.label:
+        _, linked = await linked_targets(job, qid)
+        for _, lq in linked:
+            lq.label = body.label.strip()
+        await save_linked([j for j, _ in linked], job.set_id)
         q.label = body.label.strip()
     if body.marks is not None:
         q.marks = body.marks
@@ -281,7 +312,7 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
                 raise HTTPException(400, "Invalid crop region")
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                    q.erase_applied, q.erase_status)
+                                                    q.erase_applied, q.erase_status, q.erase_manual)
         doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -290,16 +321,33 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
 async def get_erase_proposals(job_id: str, qid: str):
     job = await job_or_404(job_id)
     q = job.questions[find_idx(job, qid)]
-    return {"status": q.erase_status, "proposals": erase_proposals(job, q.parts), "applied": q.erase_applied}
+    return {"status": q.erase_status, "proposals": erase_proposals(job, q.parts), "applied": q.erase_applied,
+            "manual": q.erase_manual, "pages": sorted({p.page for p in q.parts})}
 
 
-async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]]):
+def valid_manual(q, boxes: List[List[int]]) -> List[List[int]]:
+    out = []
+    for b in boxes:
+        if len(b) != 5:
+            raise HTTPException(400, "Manual erase box must be [page, ymin, xmin, ymax, xmax]")
+        page, y0, x0, y1, x1 = (int(v) for v in b)
+        if not (0 <= y0 < y1 <= 1000 and 0 <= x0 < x1 <= 1000):
+            raise HTTPException(400, "Manual erase box out of range")
+        if not any(p.page == page and y1 > p.y0 and y0 < p.y1 for p in q.parts):
+            raise HTTPException(400, "Manual erase box must overlap the question's crop")
+        if [page, y0, x0, y1, x1] not in out:
+            out.append([page, y0, x0, y1, x1])
+    return out
+
+
+async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]], manual: List[List[int]] = None):
     q = job.questions[idx]
     allowed = erase_proposals(job, q.parts)
-    chosen = [b for b in boxes if b in allowed]
+    manual = valid_manual(q, manual or [])
+    chosen = [b for b in boxes if b in allowed] + [b for b in manual if b not in allowed]
     flags = [f for f in q.flags if f != ERASE_FLAG]
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.parts, q.marks, flags, q.id, q.reviewed, q.topic,
-                                                chosen, "applied" if chosen else "rejected")
+                                                chosen, "applied" if chosen else "rejected", manual)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/erase")
@@ -308,7 +356,7 @@ async def decide_erase(job_id: str, qid: str, body: EraseDecision):
     require_done(job)
     idx = find_idx(job, qid)
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
-    await apply_erase(job, doc, idx, body.boxes)
+    await apply_erase(job, doc, idx, body.boxes, body.manual)
     doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -322,7 +370,7 @@ async def approve_all_erases(set_id: str):
             continue
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         for i in pending:
-            await apply_erase(job, doc, i, erase_proposals(job, job.questions[i].parts))
+            await apply_erase(job, doc, i, erase_proposals(job, job.questions[i].parts), job.questions[i].erase_manual)
         doc.close()
         await edit_and_return(job, set_id)
     return await set_detail(await load_set(set_id))
@@ -335,13 +383,35 @@ async def mark_reviewed(job_id: str, qid: str):
     return await edit_and_return(job, job.set_id)
 
 
-@api.post("/jobs/{job_id}/questions/{qid}/merge-next")
-async def merge_next(job_id: str, qid: str):
-    job = await job_or_404(job_id)
-    require_done(job)
-    idx = find_idx(job, qid)
-    if idx + 1 >= len(job.questions):
-        raise HTTPException(400, "No next question to merge with")
+# ---------- linked images (memo / addendum / errata follow the question paper) ----------
+async def linked_targets(job: Job, qid: str):
+    """For a question-paper question: the set's other jobs and the linked images whose label matches it exactly."""
+    if not job.set_id or job.meta.doc_type != "question_paper":
+        return {}, []
+    jobs = {j.id: j for j in await set_jobs(job.set_id) if j.id != job.id}
+    info = compute_links([job, *jobs.values()])
+    if info["qp_id"] != job.id or qid not in info["links"]:
+        return jobs, []
+    q = next(x for x in job.questions if x.id == qid)
+    link = info["links"][qid]
+    refs = ([link["memo"]] if link["memo"] else []) + link["addenda"] + link["errata"]
+    out = []
+    for r in refs:
+        j = jobs[r["job_id"]]
+        lq = next((x for x in j.questions if x.id == r["qid"]), None)
+        if lq and (r is link["memo"] or norm_label(lq.label) == norm_label(q.label)) and (j, lq) not in out:
+            out.append((j, lq))
+    return jobs, out
+
+
+async def save_linked(changed, set_id):
+    s = await load_set(set_id)
+    for j in {j.id: j for j in changed}.values():
+        renumber(j, s.base_name if s else j.base_name)
+        await save_job(j)
+
+
+async def merge_at(job: Job, idx: int):
     a, b = job.questions[idx], job.questions[idx + 1]
     parts = []
     for p in a.parts + b.parts:
@@ -353,9 +423,35 @@ async def merge_next(job_id: str, qid: str):
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
     status = "pending" if "pending" in (a.erase_status, b.erase_status) else a.erase_status if a.erase_status != "none" else b.erase_status
     job.questions[idx] = await rebuild_question(job, doc, a.label, parts, sum_marks([a.marks, b.marks]), flags, a.id, topic=a.topic or b.topic,
-                                                erase_applied=a.erase_applied + b.erase_applied, erase_status=status)
+                                                erase_applied=a.erase_applied + b.erase_applied, erase_status=status,
+                                                erase_manual=a.erase_manual + b.erase_manual)
     doc.close()
     del job.questions[idx + 1]
+
+
+@api.post("/jobs/{job_id}/questions/{qid}/merge-next")
+async def merge_next(job_id: str, qid: str):
+    job = await job_or_404(job_id)
+    require_done(job)
+    idx = find_idx(job, qid)
+    if idx + 1 >= len(job.questions):
+        raise HTTPException(400, "No next question to merge with")
+    a, b = job.questions[idx], job.questions[idx + 1]
+    _, la = await linked_targets(job, a.id)
+    _, lb = await linked_targets(job, b.id)
+    changed = []
+    for j, bq in lb:
+        aq = next((x for jj, x in la if jj.id == j.id), None)
+        ii = next(i for i, x in enumerate(j.questions) if x.id == bq.id)
+        if aq and ii > 0 and j.questions[ii - 1].id == aq.id:
+            await merge_at(j, ii - 1)
+        elif not aq:
+            bq.label = a.label
+        else:
+            continue
+        changed.append(j)
+    await merge_at(job, idx)
+    await save_linked(changed, job.set_id)
     return await edit_and_return(job, job.set_id)
 
 
@@ -363,5 +459,10 @@ async def merge_next(job_id: str, qid: str):
 async def delete_question(job_id: str, qid: str):
     job = await job_or_404(job_id)
     require_done(job)
+    find_idx(job, qid)
+    _, linked = await linked_targets(job, qid)
+    for j, lq in linked:
+        j.questions = [x for x in j.questions if x.id != lq.id]
+    await save_linked([j for j, _ in linked], job.set_id)
     job.questions = [q for q in job.questions if q.id != qid]
     return await edit_and_return(job, job.set_id)

@@ -22,14 +22,15 @@ function App() {
   const refresh = useCallback(() => listSets().then((d) => { setSets(d.sets); setCounts(d.counts); }).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const queueActive = (counts.sorting || 0) + (counts.processing || 0) > 0;
+  const driveBusy = (s) => ["queued", "uploading"].includes(s?.drive?.status);
+  const queueActive = (counts.sorting || 0) + (counts.processing || 0) > 0 || sets.some(driveBusy);
   useEffect(() => {
     if (!queueActive) return;
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
   }, [queueActive, refresh]);
 
-  const setActive = set && set.documents.some((d) => ACTIVE_DOC.includes(d.status) && d.status !== "waiting");
+  const setActive = set && (set.documents.some((d) => ACTIVE_DOC.includes(d.status) && d.status !== "waiting") || driveBusy(set));
   useEffect(() => {
     if (!setActive) return;
     const t = setInterval(() => getSet(set.id).then(setSet).catch(() => {}), 2500);

@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
-import { FileSpreadsheet, Download } from "lucide-react";
-import { listCatalogues, catalogueUrl } from "@/lib/api";
+import { FileSpreadsheet, Download, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { listCatalogues, catalogueUrl, refreshTopics } from "@/lib/api";
 
 export const CataloguesPanel = ({ refreshKey }) => {
   const [cats, setCats] = useState([]);
   const [grade, setGrade] = useState("12");
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => {
+    setBusy(true);
+    try { const r = await refreshTopics(); toast.success(`Topics refreshed: ${r.updated} updated, ${r.cleared} need a topic`); }
+    catch { toast.error("Could not refresh topics"); }
+    setBusy(false);
+  };
   const grades = [...new Set(cats.map((c) => c.grade))];
   useEffect(() => { listCatalogues().then(setCats).catch(() => {}); }, [refreshKey]);
   return (
@@ -30,6 +38,10 @@ export const CataloguesPanel = ({ refreshKey }) => {
           </li>
         ))}
       </ul>
+      <button data-testid="catalogue-refresh-topics-button" disabled={busy} onClick={refresh}
+        className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-md border border-[var(--pc-border)] text-xs font-mono text-[var(--pc-text2)] hover:text-[var(--pc-text)] hover:bg-[var(--pc-surface2)] transition-colors">
+        <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> Refresh paper topics
+      </button>
     </aside>
   );
 };

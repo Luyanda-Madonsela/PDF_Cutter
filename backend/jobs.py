@@ -199,6 +199,10 @@ async def refresh_set(set_id: str):
     await db.sets.update_one({"_id": set_id}, {"$set": {
         "status": set_status(jobs), "docs": docs, "question_count": len(qp.questions) if qp else 0,
         "flagged": sum(1 for v in links["links"].values() if v["flags"])}})
+    pending = any(q.erase_status == "pending" for j in jobs for q in j.questions)
+    if set_status(jobs) == "done" and not pending and not s.drive:
+        from drive import auto_send  # lazy: drive imports this module
+        await auto_send(set_id)
 
 
 def compatible(a: JobMeta, b: JobMeta) -> bool:
@@ -325,7 +329,7 @@ def masks_from(applied: List[List[int]], n_pages: int) -> list:
 
 
 async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False, topic=None,
-                           erase_applied=None, erase_status: str = "none") -> Question:
+                           erase_applied=None, erase_status: str = "none", erase_manual=None) -> Question:
     applied = erase_applied or []
     crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count))
     col = job.content_col or None
@@ -333,6 +337,7 @@ async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: 
         col = union_col(col, x_bounds(c))
     q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic)
     q.reviewed, q.erase_applied, q.erase_status = reviewed, applied, erase_status
+    q.erase_manual = [b for b in (erase_manual or []) if b in applied]
     return q
 
 

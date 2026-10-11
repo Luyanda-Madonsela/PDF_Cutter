@@ -29,6 +29,11 @@ CATALOGUES = {f"gr{g}-{subj}": (f, g) for (g, subj), f in FILES.items()}
 SHEETS = {"National": "DBE", "IEB": "IEB", "KZN": "KZN", "EC": "Eastern Cape", "WC": "Western Cape", "GP": "Gauteng",
           "NW": "North West", "FS": "Free State", "MP": "Mpumalanga", "LP": "Limpopo"}
 TITLE_SESSIONS = [("NOV", "Nov"), ("SEPT", "Sep"), ("MAY", "May/Jun"), ("JUN", "May/Jun"), ("FEB", "Feb/Mar"), ("MAR", "Feb/Mar"), ("EXEMPLAR", "Exemplar")]
+GREY = "FFD9D9D9"  # rows for exams that were never written
+
+
+def is_grey(cell) -> bool:
+    return cell.fill is not None and cell.fill.fill_type == "solid" and str(cell.fill.start_color.rgb) == GREY
 
 
 def catalogue_key(meta) -> Optional[str]:
@@ -72,13 +77,15 @@ def parse_blocks(ws) -> List[dict]:
                 continue
             cols.append((c, f"{top} - {sub}" if sub and sub != top else top))
         end = titles[i + 1] if i + 1 < len(titles) else ws.max_row + 1
-        rows = {}
+        rows, grey = {}, set()
         for r in range(t + 3, end):
             ym = re.search(r"(\d{4})", str(ws.cell(r, 2).value or ""))
             if ym:
                 rows[ym.group(1)] = r
+                if is_grey(ws.cell(r, 2)):
+                    grey.add(ym.group(1))
         blocks.append({"title": title, "session": _title_session(title), "paper": m.group(1) if m else "",
-                       "cols": cols, "errata_col": errata_col, "rows": rows})
+                       "cols": cols, "errata_col": errata_col, "rows": rows, "grey": grey})
     return blocks
 
 
@@ -118,6 +125,9 @@ def locate(meta) -> dict:
     row = block["rows"].get(meta.year)
     if not row:
         return {**base, "found": False, "topics": topics, "block": block["title"], "reason": f"No {meta.year} row in {block['title']}"}
+    if meta.year in block.get("grey", ()):
+        return {**base, "found": False, "topics": topics, "block": block["title"],
+                "reason": f"{meta.year} is greyed out in {block['title']} (no such exam on record). Check the paper details"}
     return {**base, "found": True, "topics": topics, "block": block["title"], "row": row, "row_label": f"{meta.session} {meta.year}"}
 
 

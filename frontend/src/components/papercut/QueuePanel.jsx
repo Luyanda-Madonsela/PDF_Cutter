@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Download, Trash2, Flag } from "lucide-react";
 import { setZipUrl } from "@/lib/api";
+import { DriveBadge } from "./DriveSet";
 import { PC } from "@/constants/testIds";
 
 export const SET_STATUS = {
@@ -27,6 +28,7 @@ const SetItem = ({ s, active, onSelect, onDelete }) => {
           <span className={color}>{label}</span>
           {chips.map(([t, n]) => <span key={t} className="text-[var(--pc-muted)]">{DOC_CHIP[t]}{n > 1 ? `×${n}` : ""}</span>)}
           {s.flagged > 0 && <span className="text-[var(--pc-amber)] flex items-center gap-0.5"><Flag className="h-3 w-3" />{s.flagged}</span>}
+          <DriveBadge drive={s.drive} compact />
         </p>
       </button>
       {s.status === "done" && <a data-testid={`set-download-${s.id}`} href={setZipUrl(s.id)} className="p-1.5 rounded text-[var(--pc-text2)] hover:text-[var(--pc-amber)]"><Download className="h-4 w-4" /></a>}

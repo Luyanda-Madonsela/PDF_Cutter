@@ -41,6 +41,7 @@ class Question(BaseModel):
     topic: Optional[str] = None
     erase_status: str = "none"  # none | pending | applied | rejected
     erase_applied: List[List[int]] = []  # approved boxes: [page, ymin, xmin, ymax, xmax]
+    erase_manual: List[List[int]] = []  # subset of erase_applied drawn by the user
     flags: List[str] = []
     reviewed: bool = False
     width: int = 0
@@ -95,12 +96,14 @@ class PaperSet(BaseDocument):
     docs: List[DocSummary] = []
     flagged: int = 0
     question_count: int = 0
+    drive: Optional[dict] = None  # {status, uploaded, total, folder_url, error, at}
     is_deleted: bool = False
     created_at: str = Field(default_factory=now_iso)
 
 
 class EraseDecision(BaseModel):
     boxes: List[List[int]] = []  # approved subset of proposals; empty = keep original
+    manual: List[List[int]] = []  # user-drawn boxes: [page, ymin, xmin, ymax, xmax] 0-1000
 
 
 class QuestionUpdate(BaseModel):
