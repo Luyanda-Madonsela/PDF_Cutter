@@ -7,6 +7,7 @@ import { SingleUpload } from "@/components/papercut/SingleUpload";
 import { SetView } from "@/components/papercut/SetView";
 import { QueuePanel } from "@/components/papercut/QueuePanel";
 import { CataloguesPanel } from "@/components/papercut/CataloguesPanel";
+import { DriveImport } from "@/components/papercut/DriveImport";
 import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, ACTIVE_DOC } from "@/lib/api";
 
 const UPLOAD_CONCURRENCY = 3;
@@ -85,7 +86,7 @@ function App() {
               Every question,<br /><span className="text-[var(--pc-amber)]">cut clean.</span>
             </h1>
           )}
-          {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
+          {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : mode === "drive" ? <DriveImport onImported={refresh} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
           {set && <SetView set={set} onReset={() => setSet(null)} onSetChange={onSetChange} docHandlers={docHandlers} />}
         </div>
         <div className="lg:col-span-3 space-y-6">

@@ -11,13 +11,14 @@ const NOTICES = {
 };
 
 const DriveDialog = ({ st, setSt, open, onOpenChange }) => {
-  const [path, setPath] = useState(st.root);
+  const [link, setLink] = useState(st.root_link || "");
+  const [path, setPath] = useState(st.root_path || "");
   const [busy, setBusy] = useState("");
-  useEffect(() => { if (open) setPath(st.root); }, [open, st.root]);
+  useEffect(() => { if (open) { setLink(st.root_link || ""); setPath(st.root_path || ""); } }, [open, st.root_link, st.root_path]);
   const run = async (k, fn) => { setBusy(k); try { await fn(); } catch (e) { toast.error(e.response?.data?.detail || "Something went wrong"); } setBusy(""); };
   const save = () => run("save", async () => {
-    const r = await saveDriveSettings(path);
-    setSt({ ...st, root: r.root });
+    await saveDriveSettings(link, path);
+    setSt(await driveStatus());
     toast.success(r.checked ? "Folder found and saved" : "Saved. It will be checked once Drive is connected");
   });
   const connect = () => run("connect", async () => { window.location.href = (await driveConnect()).authorization_url; });
@@ -32,12 +33,15 @@ const DriveDialog = ({ st, setSt, open, onOpenChange }) => {
             {st.connected ? `Connected by ${st.connected_by}. Finished sets upload automatically.` : "Not connected. Sets will not upload until you connect."}
           </DialogDescription>
         </DialogHeader>
-        <label className="text-xs font-mono text-[var(--pc-muted)]" htmlFor="drive-root-input">Main folder (from My Drive)</label>
-        <input id="drive-root-input" data-testid="drive-root-input" value={path} onChange={(e) => setPath(e.target.value)}
+        <label className="text-xs font-mono text-[var(--pc-muted)]" htmlFor="drive-link-input">Main folder link (paste from Drive)</label>
+        <input id="drive-link-input" data-testid="drive-link-input" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://drive.google.com/drive/folders/..."
           className="w-full rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] px-3 py-2 text-sm font-mono focus:outline-none focus:border-[var(--pc-amber)]" />
-        <p className="text-xs text-[var(--pc-muted)]">Papers go into {"{Year}/Grade N/{Subject}/{Session}/{Province}"} inside this folder; catalogues go into its Catalogues folder.</p>
+        <label className="text-xs font-mono text-[var(--pc-muted)]" htmlFor="drive-root-input">Sub-folder that holds the Year folders</label>
+        <input id="drive-root-input" data-testid="drive-root-input" value={path} onChange={(e) => setPath(e.target.value)} placeholder="CAPS & IEB Past Papers"
+          className="w-full rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] px-3 py-2 text-sm font-mono focus:outline-none focus:border-[var(--pc-amber)]" />
+        <p className="text-xs text-[var(--pc-muted)]">Papers go into {"{Year}/Grade N/{Subject}/{Session}/{Province}"} inside the sub-folder. Catalogues go into its Catalogues folder. Leave the link empty to start from My Drive.</p>
         <div className="flex gap-2 flex-wrap pt-2">
-          <button data-testid="drive-root-save-button" disabled={!!busy || !path.trim()} onClick={save} className="pc-btn-primary text-sm">
+          <button data-testid="drive-root-save-button" disabled={!!busy || (!path.trim() && !link.trim())} onClick={save} className="pc-btn-primary text-sm">
             {busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Save folder
           </button>
           {st.connected

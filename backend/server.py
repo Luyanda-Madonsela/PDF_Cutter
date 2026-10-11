@@ -6,11 +6,13 @@ from core import client, db, init_storage, logger
 from routes import api
 from auth import auth_api
 from drive import drive_api
+from drive_import import import_api
 from jobs import worker_loop
 
 app = FastAPI()
 app.include_router(auth_api)
 app.include_router(drive_api)
+app.include_router(import_api)
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,

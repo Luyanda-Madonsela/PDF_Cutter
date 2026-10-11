@@ -2,7 +2,7 @@ import { Scissors } from "lucide-react";
 import { PC } from "@/constants/testIds";
 import { UserMenu } from "./UserMenu";
 
-const MODES = [["single", "One paper"], ["bulk", "Bulk upload"]];
+const MODES = [["single", "One paper"], ["bulk", "Bulk upload"], ["drive", "From Drive"]];
 
 export const Header = ({ mode, onMode }) => (
   <header data-testid={PC.header} className="sticky top-0 z-30 border-b border-[var(--pc-border)] bg-[var(--pc-bg)]/80 backdrop-blur-md">

@@ -355,8 +355,23 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
                 raise HTTPException(400, "Invalid crop region")
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                    q.erase_applied, q.erase_status, q.erase_manual)
+                                                    q.erase_applied, q.erase_status, q.erase_manual, q.crop_history + [q.parts])
         doc.close()
+    return await edit_and_return(job, job.set_id)
+
+
+@api.post("/jobs/{job_id}/questions/{qid}/undo-crop")
+async def undo_crop(job_id: str, qid: str):
+    job = await job_or_404(job_id)
+    require_done(job)
+    idx = find_idx(job, qid)
+    q = job.questions[idx]
+    if not q.crop_history:
+        raise HTTPException(400, "No earlier crop to go back to")
+    doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
+    job.questions[idx] = await rebuild_question(job, doc, q.label, q.crop_history[-1], q.marks, q.flags, q.id, q.reviewed, q.topic,
+                                                q.erase_applied, q.erase_status, q.erase_manual, q.crop_history[:-1])
+    doc.close()
     return await edit_and_return(job, job.set_id)
 
 
@@ -390,7 +405,7 @@ async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]], manual: L
     chosen = [b for b in boxes if b in allowed] + [b for b in manual if b not in allowed]
     flags = [f for f in q.flags if f != ERASE_FLAG]
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.parts, q.marks, flags, q.id, q.reviewed, q.topic,
-                                                chosen, "applied" if chosen else "rejected", manual)
+                                                chosen, "applied" if chosen else "rejected", manual, q.crop_history)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/erase")

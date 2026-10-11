@@ -1,4 +1,5 @@
 import os
+import re
 import io
 import asyncio
 import secrets
@@ -43,13 +44,33 @@ def _flow(scopes):
     return Flow.from_client_config(_client_config(), scopes=scopes, redirect_uri=os.environ["GOOGLE_DRIVE_REDIRECT_URI"])
 
 
+FOLDER_ID = re.compile(r"(?:folders/|id=)([A-Za-z0-9_-]{10,})")
+
+
 def split_path(path: str) -> List[str]:
     return [p.strip() for p in path.replace("My Drive/", "", 1).split("/") if p.strip()]
 
 
+def folder_id_from(link: str) -> Optional[str]:
+    link = (link or "").strip()
+    m = FOLDER_ID.search(link)
+    return m.group(1) if m else (link if re.fullmatch(r"[A-Za-z0-9_-]{10,}", link) else None)
+
+
+async def drive_settings() -> dict:
+    doc = await db.settings.find_one({"_id": "drive"}) or {}
+    return {"root_id": doc.get("root_id", os.environ.get("DRIVE_ROOT_FOLDER_ID") or None),
+            "root_path": doc.get("root_path", os.environ["DRIVE_ROOT_PATH"])}
+
+
 async def root_path() -> List[str]:
-    doc = await db.settings.find_one({"_id": "drive"})
-    return split_path(doc["root_path"] if doc else os.environ["DRIVE_ROOT_PATH"])
+    """Path to the folder holding the Year folders; starts with 'id:<folder>' when a folder link is set."""
+    st = await drive_settings()
+    return ([f"id:{st['root_id']}"] if st["root_id"] else []) + split_path(st["root_path"])
+
+
+def show_root(st: dict) -> str:
+    return "/".join([f"[linked folder]" if st["root_id"] else "My Drive", *split_path(st["root_path"])])
 
 
 # ---------- OAuth ----------
@@ -101,26 +122,35 @@ async def drive_service():
 @drive_api.get("/status")
 async def status(user: User = Depends(require_user)):
     doc = await db.drive_credentials.find_one({"_id": CRED_ID}, {"_id": 0, "connected_by": 1, "updated_at": 1})
-    return {"connected": bool(doc), "connected_by": doc and doc.get("connected_by"), "root": "/".join(["My Drive", *await root_path()])}
+    st = await drive_settings()
+    return {"connected": bool(doc), "connected_by": doc and doc.get("connected_by"), "root": show_root(st),
+            "root_id": st["root_id"], "root_path": st["root_path"],
+            "root_link": f"https://drive.google.com/drive/folders/{st['root_id']}" if st["root_id"] else None}
 
 
 class DriveSettings(BaseModel):
-    root_path: str
+    root_link: str = ""
+    root_path: str = ""
 
 
 @drive_api.put("/settings")
 async def save_settings(body: DriveSettings, user: User = Depends(require_user)):
+    root_id = folder_id_from(body.root_link) if body.root_link.strip() else None
+    if body.root_link.strip() and not root_id:
+        raise HTTPException(400, "That doesn't look like a Google Drive folder link")
     parts = split_path(body.root_path)
-    if not parts:
-        raise HTTPException(400, "Folder path cannot be empty")
+    if not root_id and not parts:
+        raise HTTPException(400, "Give a folder link or a folder path")
+    root = ([f"id:{root_id}"] if root_id else []) + parts
     svc = await drive_service()
     if svc:
         try:
-            await asyncio.to_thread(DriveWriter(svc, parts).folder, parts)
-        except RuntimeError as e:
-            raise HTTPException(400, str(e))
-    await db.settings.update_one({"_id": "drive"}, {"$set": {"root_path": "/".join(parts), "updated_by": user.email}}, upsert=True)
-    return {"root": "/".join(["My Drive", *parts]), "checked": bool(svc)}
+            await asyncio.to_thread(DriveWriter(svc, root).folder, root)
+        except (RuntimeError, HttpError) as e:
+            raise HTTPException(400, f"Folder not reachable with the connected account: {e}"[:300])
+    st = {"root_id": root_id, "root_path": "/".join(parts)}
+    await db.settings.update_one({"_id": "drive"}, {"$set": {**st, "updated_by": user.email}}, upsert=True)
+    return {"root": show_root(st), "checked": bool(svc)}
 
 
 @drive_api.post("/disconnect")
@@ -168,6 +198,14 @@ class DriveWriter:
         for i, name in enumerate(path):
             walked.append(name)
             key = "/".join(walked)
+            if name.startswith("id:"):
+                if key not in self.cache:
+                    meta = _retry(self.svc.files().get(fileId=name[3:], fields="id,mimeType", supportsAllDrives=True))
+                    if meta["mimeType"] != FOLDER:
+                        raise RuntimeError("The linked Drive item is not a folder")
+                    self.cache[key] = meta["id"]
+                parent = self.cache[key]
+                continue
             if key not in self.cache:
                 fid = self._find(parent, name, True)
                 if not fid:
@@ -180,6 +218,7 @@ class DriveWriter:
         return parent
 
     def put(self, path: List[str], name: str, data: bytes, mime: str, replace: bool) -> bool:
+        """PDFs we upload are tagged so the Drive scan never re-imports them."""
         parent = self.folder(path)
         existing = self._find(parent, name, False)
         if existing and not replace:
@@ -188,7 +227,8 @@ class DriveWriter:
         if existing:
             _retry(self.svc.files().update(fileId=existing, media_body=media, supportsAllDrives=True))
         else:
-            _retry(self.svc.files().create(body={"name": name, "parents": [parent]}, media_body=media, fields="id", supportsAllDrives=True))
+            body = {"name": name, "parents": [parent], **({"appProperties": {"papercut": "1"}} if mime == "application/pdf" else {})}
+            _retry(self.svc.files().create(body=body, media_body=media, fields="id", supportsAllDrives=True))
         return True
 
 
@@ -203,16 +243,23 @@ def paper_folder(meta, root: List[str]) -> List[str]:
             PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
 
 
+def plan_base(s: PaperSet, jobs, root: List[str]) -> List[str]:
+    """Imported PDFs send their images back to the Drive paper folder they came from."""
+    src = next((j.drive_source for j in sorted(jobs, key=lambda j: j.meta.doc_type != "question_paper")
+                if j.drive_source and j.drive_source.get("paper_folder_id")), None)
+    return [f"id:{src['paper_folder_id']}"] if src else paper_folder(s.meta, root)
+
+
 def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
     """Every file for this set: {path, name, storage, mime, replace}."""
-    base = paper_folder(s.meta, root)
+    base = plan_base(s, jobs, root)
     n = s.meta.paper or "1"
     info = compute_links(jobs)
     by_id = {j.id: j for j in jobs}
     qmap = {(j.id, q.id): q for j in jobs for q in j.questions}
     pdf_dir = {"question_paper": f"Paper_{n}", "memo": f"Memo_Paper_{n}", "addendum": "Addendum", "errata": "Errata"}
     out = [{"path": base + [pdf_dir[j.meta.doc_type]], "name": j.filename, "storage": j.pdf_path, "mime": "application/pdf", "replace": False}
-           for j in jobs if j.status == "done" and j.meta.doc_type in pdf_dir]
+           for j in jobs if j.status == "done" and j.meta.doc_type in pdf_dir and not j.drive_source]
     qp = by_id.get(info["qp_id"])
     if not qp:
         return out
@@ -270,10 +317,12 @@ async def run_send(set_id: str):
             await asyncio.to_thread(w.put, [*root, "Catalogues"], CATALOGUES[key][0], wb,
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", True)
             done += 1
-        folder_id = await asyncio.to_thread(w.folder, paper_folder(s.meta, root))
+        base = plan_base(s, jobs, root)
+        folder_id = await asyncio.to_thread(w.folder, base)
         await set_drive(set_id, status="done", uploaded=done, skipped=skipped, error=None,
                         folder_url=f"https://drive.google.com/drive/folders/{folder_id}",
-                        folder_path="/".join(["My Drive", *paper_folder(s.meta, root)]), at=datetime.now(timezone.utc).isoformat())
+                        folder_path="/".join(p for p in base if not p.startswith("id:")) or "original Drive folder",
+                        at=datetime.now(timezone.utc).isoformat())
     except Exception as e:
         logger.exception("Drive upload failed")
         await set_drive(set_id, status="error", error=str(e)[:300])

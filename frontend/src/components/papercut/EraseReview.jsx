@@ -36,9 +36,10 @@ export const EraseReview = ({ doc, q, onDecide }) => {
         {pages.map((p) => (
           <ErasePage key={p} jobId={doc.id} page={p} parts={q.parts.filter((x) => x.page === p)}
             proposals={info.proposals.filter((b) => b[0] === p)} selected={selected} onToggle={toggle}
-            manual={manual.filter((b) => b[0] === p)}
+            manual={manual.map((b, i) => ({ b, i })).filter(({ b }) => b[0] === p)}
             onAdd={(b) => setManual((m) => [...m, b])}
-            onRemove={(b) => setManual((m) => m.filter((x) => boxKey(x) !== boxKey(b)))} />
+            onUpdate={(i, b) => setManual((m) => m.map((x, j) => (j === i ? b : x)))}
+            onRemove={(i) => setManual((m) => m.filter((_, j) => j !== i))} />
         ))}
       </div>
       <div className="flex gap-3 flex-wrap items-center sticky bottom-0 bg-[var(--pc-surface)] py-2">

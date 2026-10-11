@@ -42,6 +42,7 @@ class Question(BaseModel):
     erase_status: str = "none"  # none | pending | applied | rejected
     erase_applied: List[List[int]] = []  # approved boxes: [page, ymin, xmin, ymax, xmax]
     erase_manual: List[List[int]] = []  # subset of erase_applied drawn by the user
+    crop_history: List[List[Part]] = []  # previous crops, newest last (for undo)
     flags: List[str] = []
     reviewed: bool = False
     width: int = 0
@@ -62,6 +63,7 @@ class JobMeta(BaseModel):
 class Job(BaseDocument):
     filename: str
     pdf_path: str = ""
+    drive_source: Optional[dict] = None  # {file_id, paper_folder_id} when imported from Google Drive
     is_deleted: bool = False
     # queued -> classifying -> waiting (set incomplete) -> ready -> processing -> done | error
     status: str = "queued"

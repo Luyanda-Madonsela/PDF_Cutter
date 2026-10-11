@@ -311,8 +311,17 @@ def test_plan_uploads_structure():
 
     async def _load():
         return await load_set(s["id"]), await set_jobs(s["id"])
-    ps, jobs = asyncio.run(_load())
-    items = drive.plan_uploads(ps, jobs)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    ps, jobs = loop.run_until_complete(_load())
+    root_str = _get("/drive/status").json()["root"]
+    root = [p for p in root_str.replace("My Drive/", "", 1).split("/") if p]
+    items = drive.plan_uploads(ps, jobs, root)
     assert items
     # Expect: PDFs in Paper_2/Memo_Paper_2/Addendum/Errata; questions under Questions/Paper_2/Question_{main}/...
     paths = ["/".join(it["path"]) for it in items]

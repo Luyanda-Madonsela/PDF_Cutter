@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
 import { LinkedList } from "./LinkedEditor";
-import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase } from "@/lib/api";
+import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const ImgBox = ({ src, alt }) => (
@@ -71,7 +71,8 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
               </TabsContent>
               <TabsContent value="adjust">
                 <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
-                  onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))} />
+                  onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))}
+                  onUndoSaved={() => act(() => undoCrop(doc.id, q.id), "Previous crop restored")} />
               </TabsContent>
             </Tabs>
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--pc-border)]">

@@ -328,8 +328,11 @@ def masks_from(applied: List[List[int]], n_pages: int) -> list:
     return masks
 
 
+CROP_HISTORY = 20
+
+
 async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False, topic=None,
-                           erase_applied=None, erase_status: str = "none", erase_manual=None) -> Question:
+                           erase_applied=None, erase_status: str = "none", erase_manual=None, crop_history=None) -> Question:
     applied = erase_applied or []
     crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count))
     col = job.content_col or None
@@ -338,6 +341,7 @@ async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: 
     q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic)
     q.reviewed, q.erase_applied, q.erase_status = reviewed, applied, erase_status
     q.erase_manual = [b for b in (erase_manual or []) if b in applied]
+    q.crop_history = (crop_history or [])[-CROP_HISTORY:]
     return q
 
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
-import { imageUrl, updateQuestion, decideErase } from "@/lib/api";
+import { imageUrl, updateQuestion, decideErase, undoCrop } from "@/lib/api";
 
 const MODES = [["image", "Image"], ["erase", "Erase"], ["adjust", "Adjust crop"]];
 
@@ -31,7 +31,8 @@ export const LinkedEditor = ({ refItem, documents, onSetChange, kind }) => {
       )}
       {mode === "adjust" && (
         <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
-          onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated")} />
+          onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated")}
+          onUndoSaved={() => act(() => undoCrop(doc.id, q.id), "Previous crop restored")} />
       )}
     </div>
   );
