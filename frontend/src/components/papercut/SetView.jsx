@@ -8,7 +8,7 @@ import { DriveSetPanel } from "./DriveSet";
 import { RecropSetButton } from "./Recrop";
 import { RateDifficultyButton } from "./RateDifficulty";
 import { SET_STATUS } from "./QueuePanel";
-import { setZipUrl, DOC_LABEL, approveAllErases } from "@/lib/api";
+import { setZipUrl, DOC_LABEL, approveAllErases, reviewAllQuestions } from "@/lib/api";
 import { toast } from "sonner";
 import { PC } from "@/constants/testIds";
 
@@ -31,9 +31,9 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
   return (
     <div className="pc-card p-6 sm:p-8 space-y-5 pc-rise">
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-6">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div data-testid="set-status" className={`pc-overline mb-2 !${color}`}>{label}</div>
-          <p className="font-heading text-2xl font-extrabold break-all">{set.base_name || "New paper set"}</p>
+          <p className="font-heading text-2xl font-extrabold break-words">{set.base_name || "New paper set"}</p>
           <div data-testid={PC.metaBar} className="flex flex-wrap items-center gap-2 mt-3">
             <MetaChips meta={set.meta} />
             <MetaEditor set={set} onSetChange={onSetChange} />
@@ -41,7 +41,7 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
           <CatalogueLine cat={set.catalogue} />
           <div className="mt-3 flex items-center gap-2 flex-wrap"><DriveSetPanel set={set} onSetChange={onSetChange} /><RecropSetButton set={set} onSetChange={onSetChange} /><RateDifficultyButton set={set} onSetChange={onSetChange} /></div>
         </div>
-        <div className="flex gap-3 flex-wrap shrink-0">
+        <div className="flex gap-3 flex-wrap shrink-0 md:max-w-[55%] md:justify-end">
           <button data-testid={PC.newPdfButton} onClick={onReset} className="pc-btn-secondary"><Plus className="h-4 w-4" /> Upload more</button>
           {set.erase_pending > 0 && (
             <button data-testid="approve-all-erases-button" className="pc-btn-secondary !border-red-400/60"
@@ -50,6 +50,16 @@ const SetHeader = ({ set, onReset, onSetChange, docHandlers }) => {
                 try { onSetChange(await approveAllErases(set.id)); toast.success("Erases applied"); } catch { toast.error("Could not apply erases"); }
               }}>
               Approve all erases ({set.erase_pending})
+            </button>
+          )}
+          {set.question_count > 0 && (
+            <button data-testid="approve-all-questions-button" className="pc-btn-secondary !border-[var(--pc-emerald)]/60"
+              onClick={async () => {
+                if (!window.confirm(`Approve all ${set.question_count} questions in this set without previewing them individually?`)) return;
+                try { onSetChange(await reviewAllQuestions(set.id)); toast.success("All questions approved"); }
+                catch (e) { toast.error(e.response?.data?.detail || "Could not approve questions"); }
+              }}>
+              Approve all questions ({set.question_count})
             </button>
           )}
           {set.qp_id && <a data-testid={PC.downloadZip} href={setZipUrl(set.id)} className="pc-btn-primary"><Download className="h-4 w-4" /> Download ZIP</a>}

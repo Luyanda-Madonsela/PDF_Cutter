@@ -33,6 +33,7 @@ class Question(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     order: int = 0
     label: str
+    related_labels: List[str] = []
     filename: str = ""
     storage_path: str
     parts: List[Part] = []
@@ -43,9 +44,12 @@ class Question(BaseModel):
     erase_status: str = "none"  # none | pending | applied | rejected
     erase_applied: List[List[int]] = []  # approved boxes: [page, ymin, xmin, ymax, xmax]
     erase_manual: List[List[int]] = []  # subset of erase_applied drawn by the user
+    erase_white: List[List[int]] = []  # subset of erase_applied explicitly filled with white
+    memo_links: List[str] = []  # manually linked memo question IDs; empty means automatic matching
     crop_history: List[List[Part]] = []  # previous crops, newest last (for undo)
     flags: List[str] = []
     reviewed: bool = False
+    annotations: List[dict] = []
     width: int = 0
     height: int = 0
 
@@ -101,6 +105,7 @@ class DocSummary(BaseModel):
 class PaperSet(BaseDocument):
     meta: JobMeta = Field(default_factory=JobMeta)
     base_name: str = ""
+    school_test_number: Optional[int] = None
     mode: str = "bulk"  # single | bulk
     status: str = "needs_memo"  # needs_memo | needs_paper | processing | done | error
     docs: List[DocSummary] = []
@@ -115,6 +120,15 @@ class PaperSet(BaseDocument):
 class EraseDecision(BaseModel):
     boxes: List[List[int]] = []  # approved subset of proposals; empty = keep original
     manual: List[List[int]] = []  # user-drawn boxes: [page, ymin, xmin, ymax, xmax] 0-1000
+    white: List[List[int]] = []  # user-drawn boxes to fill with white
+
+
+class MemoLinkUpdate(BaseModel):
+    memo_qids: List[str] = []
+
+
+class QuestionAnnotations(BaseModel):
+    annotations: List[dict] = []
 
 
 class QuestionUpdate(BaseModel):
@@ -124,3 +138,10 @@ class QuestionUpdate(BaseModel):
     clear_marks: bool = False
     topic: Optional[str] = None
     difficulty: Optional[str] = None  # "" clears it
+
+
+class QuestionSplit(BaseModel):
+    page: int = Field(ge=0)
+    y: int = Field(ge=0, le=1000)
+    label: str = Field(min_length=1)
+    parts: Optional[List[Part]] = None

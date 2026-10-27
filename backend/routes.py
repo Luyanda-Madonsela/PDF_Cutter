@@ -1,17 +1,19 @@
 import io
 import asyncio
 import zipfile
+import re
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
 from auth import require_user
 from fastapi.responses import Response, StreamingResponse
 import pymupdf
 from core import db, put_object, get_object, APP_NAME
-from models import Job, JobMeta, PaperSet, QuestionUpdate, EraseDecision, DOC_TYPES
+from models import Job, JobMeta, PaperSet, QuestionUpdate, QuestionSplit, EraseDecision, MemoLinkUpdate, QuestionAnnotations, DOC_TYPES
 from catalogue import CATALOGUES, catalogue_key, locate, build_workbook
 from jobs import (load_job, load_set, set_jobs, save_job, set_fields, renumber, refresh_set, compute_links,
                   rebuild_question, canon_meta, update_set_meta, sum_marks, norm_label,
-                  erase_proposals, ERASE_FLAG, DIFF_FLAG, match_topic, stop_job, rate_set, hardest, RATING, BULK, rate_all)
+                  erase_proposals, ERASE_FLAG, DIFF_FLAG, match_topic, stop_job, rate_set, hardest, RATING, BULK, rate_all,
+                  ensure_school_test_number, next_school_test_number, school_test_scope, split_parts)
 from ai import LEVELS
 from syllabus import rename
 
@@ -190,7 +192,17 @@ async def get_set(set_id: str):
 @api.patch("/sets/{set_id}/meta")
 async def patch_set_meta(set_id: str, meta: JobMeta):
     s = await set_or_404(set_id)
-    await update_set_meta(s, canon_meta(meta))
+    old_scope = school_test_scope(s.meta)
+    meta = canon_meta(meta)
+    await update_set_meta(s, meta)
+    if s.meta.school and (s.school_test_number is None or school_test_scope(s.meta) != old_scope):
+        s.school_test_number = await next_school_test_number(s.meta)
+        await db.sets.update_one({"_id": s.id}, {"$set": {"school_test_number": s.school_test_number}})
+    elif not s.meta.school and s.school_test_number is not None:
+        s.school_test_number = None
+        await db.sets.update_one({"_id": s.id}, {"$set": {"school_test_number": None}})
+    if s.meta.school and s.school_test_number is None:
+        await ensure_school_test_number(s)
     for j in await set_jobs(set_id):
         renumber(j, s.base_name)
         await save_job(j)
@@ -423,9 +435,101 @@ async def update_question(job_id: str, qid: str, body: QuestionUpdate):
                 raise HTTPException(400, "Invalid crop region")
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         job.questions[idx] = await rebuild_question(job, doc, q.label, body.parts, q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                    q.erase_applied, q.erase_status, q.erase_manual, q.crop_history + [q.parts], q.difficulty)
+                                                    q.erase_applied, q.erase_status, q.erase_manual, q.crop_history + [q.parts], q.difficulty,
+                                                    q.annotations, q.related_labels, q.erase_white, q.memo_links)
         doc.close()
     return await edit_and_return(job, job.set_id)
+
+
+@api.post("/jobs/{job_id}/questions/{qid}/split")
+async def split_question(job_id: str, qid: str, body: QuestionSplit):
+    job = await job_or_404(job_id)
+    require_done(job)
+    if job.meta.doc_type != "question_paper":
+        raise HTTPException(400, "Only question-paper questions can be split")
+    idx = find_idx(job, qid)
+    question = job.questions[idx]
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(400, "A label is required for the new question")
+    if norm_label(label) == norm_label(question.label):
+        raise HTTPException(400, f"Question label {label} is already in use")
+    used_labels = {
+        norm_label(existing_label)
+        for existing in job.questions
+        if existing.id != qid
+        for existing_label in (existing.related_labels or [existing.label])
+    }
+    if norm_label(label) in used_labels:
+        raise HTTPException(400, f"Question label {label} is already in use")
+    parts = body.parts if body.parts is not None else question.parts
+    if not parts:
+        raise HTTPException(400, "At least one crop region required")
+    for part in parts:
+        if part.page < 0 or part.page >= job.total_pages or not (0 <= part.y0 < part.y1 <= 1000):
+            raise HTTPException(400, "Invalid crop region")
+    try:
+        first_parts, second_parts = split_parts(parts, body.page, body.y)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+    original_labels = question.related_labels or [question.label]
+    original_related_labels = [
+        existing_label for existing_label in original_labels
+        if norm_label(existing_label) != norm_label(label)
+    ]
+    new_question_flags = list(dict.fromkeys(question.flags + ["Marks not found"]))
+    doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
+    try:
+        original = await rebuild_question(
+            job, doc, question.label, first_parts, question.marks, question.flags, question.id,
+            reviewed=False, topic=question.topic, erase_applied=question.erase_applied,
+            erase_status=question.erase_status, erase_manual=question.erase_manual,
+            crop_history=[], difficulty=question.difficulty,
+            annotations=question.annotations, related_labels=original_related_labels,
+            erase_white=question.erase_white, memo_links=question.memo_links,
+        )
+        new_question = await rebuild_question(
+            job, doc, label, second_parts, None, new_question_flags, "",
+            reviewed=False, topic=question.topic, erase_applied=question.erase_applied,
+            erase_status=question.erase_status, erase_manual=question.erase_manual,
+            difficulty=question.difficulty, related_labels=[label], erase_white=question.erase_white,
+        )
+    finally:
+        doc.close()
+    job.questions[idx] = original
+    job.questions.insert(idx + 1, new_question)
+    return await edit_and_return(job, job.set_id)
+
+
+@api.put("/jobs/{job_id}/questions/{qid}/annotations")
+async def update_question_annotations(job_id: str, qid: str, body: QuestionAnnotations):
+    job = await job_or_404(job_id)
+    require_done(job)
+    idx = find_idx(job, qid)
+    if len(body.annotations) > 500:
+        raise HTTPException(400, "At most 500 annotations are allowed per image")
+    for annotation in body.annotations:
+        if not isinstance(annotation, dict) or annotation.get("type") not in ("path", "text"):
+            raise HTTPException(400, "Annotation type must be path or text")
+        color = annotation.get("color", "#e11d48")
+        if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise HTTPException(400, "Annotation color must be a six-digit hex color")
+        if annotation["type"] == "text":
+            if not isinstance(annotation.get("text"), str) or len(annotation["text"]) > 300:
+                raise HTTPException(400, "Annotation text must be 300 characters or fewer")
+            points = [[annotation.get("x"), annotation.get("y")]]
+        else:
+            points = annotation.get("points")
+            if not isinstance(points, list) or len(points) > 5000:
+                raise HTTPException(400, "Path annotation must contain at most 5000 points")
+        for point in points:
+            if (not isinstance(point, list) or len(point) != 2
+                    or any(not isinstance(value, (int, float)) or not 0 <= value <= 1 for value in point)):
+                raise HTTPException(400, "Annotation coordinates must be normalized between 0 and 1")
+    job.questions[idx].annotations = body.annotations
+    await save_job(job)
+    return await set_detail(await load_set(job.set_id)) if job.set_id else job.model_dump(exclude=JOB_EXCLUDE)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/undo-crop")
@@ -438,7 +542,8 @@ async def undo_crop(job_id: str, qid: str):
         raise HTTPException(400, "No earlier crop to go back to")
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.crop_history[-1], q.marks, q.flags, q.id, q.reviewed, q.topic,
-                                                q.erase_applied, q.erase_status, q.erase_manual, q.crop_history[:-1], q.difficulty)
+                                                q.erase_applied, q.erase_status, q.erase_manual, q.crop_history[:-1], q.difficulty,
+                                                q.annotations, q.related_labels, q.erase_white, q.memo_links)
     doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -448,7 +553,23 @@ async def get_erase_proposals(job_id: str, qid: str):
     job = await job_or_404(job_id)
     q = job.questions[find_idx(job, qid)]
     return {"status": q.erase_status, "proposals": erase_proposals(job, q.parts), "applied": q.erase_applied,
-            "manual": q.erase_manual, "pages": sorted({p.page for p in q.parts})}
+            "manual": q.erase_manual, "white": q.erase_white, "pages": sorted({p.page for p in q.parts})}
+
+
+@api.put("/jobs/{job_id}/questions/{qid}/memo-links")
+async def update_memo_links(job_id: str, qid: str, body: MemoLinkUpdate):
+    job = await job_or_404(job_id)
+    require_done(job)
+    if job.meta.doc_type != "question_paper" or not job.set_id:
+        raise HTTPException(400, "Memo answers can only be linked to a question-paper question in a set")
+    idx = find_idx(job, qid)
+    memo_job = next((j for j in await set_jobs(job.set_id) if j.meta.doc_type == "memo" and j.status == "done"), None)
+    available = {question.id for question in memo_job.questions} if memo_job else set()
+    requested = list(dict.fromkeys(body.memo_qids))
+    if any(memo_qid not in available for memo_qid in requested):
+        raise HTTPException(400, "A selected memo answer does not belong to a completed memo in this set")
+    job.questions[idx].memo_links = requested
+    return await edit_and_return(job, job.set_id)
 
 
 def valid_manual(q, boxes: List[List[int]]) -> List[List[int]]:
@@ -466,14 +587,17 @@ def valid_manual(q, boxes: List[List[int]]) -> List[List[int]]:
     return out
 
 
-async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]], manual: List[List[int]] = None):
+async def apply_erase(job: Job, doc, idx: int, boxes: List[List[int]], manual: List[List[int]] = None,
+                      white: List[List[int]] = None):
     q = job.questions[idx]
     allowed = erase_proposals(job, q.parts)
     manual = valid_manual(q, manual or [])
-    chosen = [b for b in boxes if b in allowed] + [b for b in manual if b not in allowed]
+    white = valid_manual(q, white or [])
+    chosen = [b for b in boxes if b in allowed] + [b for b in manual if b not in allowed] + [b for b in white if b not in allowed]
     flags = [f for f in q.flags if f != ERASE_FLAG]
     job.questions[idx] = await rebuild_question(job, doc, q.label, q.parts, q.marks, flags, q.id, q.reviewed, q.topic,
-                                                chosen, "applied" if chosen else "rejected", manual, q.crop_history, q.difficulty)
+                                                chosen, "applied" if chosen else "rejected", manual, q.crop_history, q.difficulty,
+                                                q.annotations, q.related_labels, white, q.memo_links)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/erase")
@@ -482,7 +606,7 @@ async def decide_erase(job_id: str, qid: str, body: EraseDecision):
     require_done(job)
     idx = find_idx(job, qid)
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
-    await apply_erase(job, doc, idx, body.boxes, body.manual)
+    await apply_erase(job, doc, idx, body.boxes, body.manual, body.white)
     doc.close()
     return await edit_and_return(job, job.set_id)
 
@@ -496,10 +620,32 @@ async def approve_all_erases(set_id: str):
             continue
         doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
         for i in pending:
-            await apply_erase(job, doc, i, erase_proposals(job, job.questions[i].parts), job.questions[i].erase_manual)
+            await apply_erase(job, doc, i, erase_proposals(job, job.questions[i].parts),
+                              job.questions[i].erase_manual, job.questions[i].erase_white)
         doc.close()
         await edit_and_return(job, set_id)
     return await set_detail(await load_set(set_id))
+
+
+@api.post("/sets/{set_id}/review-all")
+async def review_all_questions(set_id: str):
+    await set_or_404(set_id)
+    reviewed = 0
+    for job in await set_jobs(set_id):
+        if job.meta.doc_type != "question_paper" or job.status != "done":
+            continue
+        changed = False
+        for question in job.questions:
+            if not question.reviewed:
+                question.reviewed = True
+                reviewed += 1
+                changed = True
+        if changed:
+            await save_job(job)
+    await refresh_set(set_id)
+    result = await set_detail(await load_set(set_id))
+    result["reviewed_questions"] = reviewed
+    return result
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/review")
@@ -520,12 +666,16 @@ async def linked_targets(job: Job, qid: str):
         return jobs, []
     q = next(x for x in job.questions if x.id == qid)
     link = info["links"][qid]
-    refs = ([link["memo"]] if link["memo"] else []) + link["addenda"] + link["errata"]
+    memo_refs = link.get("memos") or ([link["memo"]] if link["memo"] else [])
+    memo_ref_ids = {(r["job_id"], r["qid"]) for r in memo_refs}
+    refs = memo_refs + link["addenda"] + link["errata"]
     out = []
     for r in refs:
         j = jobs[r["job_id"]]
         lq = next((x for x in j.questions if x.id == r["qid"]), None)
-        if lq and (r is link["memo"] or norm_label(lq.label) == norm_label(q.label)) and (j, lq) not in out:
+        labels = {norm_label(label) for label in (q.related_labels or [q.label])}
+        is_memo = (r["job_id"], r["qid"]) in memo_ref_ids
+        if lq and (is_memo or norm_label(lq.label) in labels) and (j, lq) not in out:
             out.append((j, lq))
     return jobs, out
 
@@ -537,22 +687,64 @@ async def save_linked(changed, set_id):
         await save_job(j)
 
 
-async def merge_at(job: Job, idx: int):
-    a, b = job.questions[idx], job.questions[idx + 1]
+async def merge_questions(job: Job, question_ids: List[str], memo_links=None):
+    question_id_set = set(question_ids)
+    selected = [
+        (index, question) for index, question in enumerate(job.questions)
+        if question.id in question_id_set
+    ]
+    if not selected:
+        return None
+    a = selected[0][1]
+    if len(selected) == 1:
+        return a
+
     parts = []
-    for p in a.parts + b.parts:
-        if parts and parts[-1].page == p.page and p.y0 <= parts[-1].y1 + 30:  # touching regions on the same page
-            parts[-1].y1 = max(parts[-1].y1, p.y1)
-        else:
-            parts.append(p.model_copy())
-    flags = [f for f in dict.fromkeys(a.flags + b.flags)]
+    previous_source_index = None
+    for source_index, question in selected:
+        for part in question.parts:
+            adjacent_source = previous_source_index in (source_index, source_index - 1)
+            if (parts and adjacent_source and parts[-1].page == part.page
+                    and part.y0 <= parts[-1].y1 + 30):
+                parts[-1].y1 = max(parts[-1].y1, part.y1)
+            else:
+                parts.append(part.model_copy())
+            previous_source_index = source_index
+    selected_questions = [question for _, question in selected]
+    flags = list(dict.fromkeys(flag for question in selected_questions for flag in question.flags))
     doc = pymupdf.open(stream=await get_object(job.pdf_path), filetype="pdf")
-    status = "pending" if "pending" in (a.erase_status, b.erase_status) else a.erase_status if a.erase_status != "none" else b.erase_status
-    job.questions[idx] = await rebuild_question(job, doc, a.label, parts, sum_marks([a.marks, b.marks]), flags, a.id, topic=a.topic or b.topic,
-                                                erase_applied=a.erase_applied + b.erase_applied, erase_status=status,
-                                                erase_manual=a.erase_manual + b.erase_manual, difficulty=hardest([a.difficulty, b.difficulty]))
-    doc.close()
-    del job.questions[idx + 1]
+    statuses = [question.erase_status for question in selected_questions]
+    status = "pending" if "pending" in statuses else next((value for value in statuses if value != "none"), "none")
+    try:
+        merged = await rebuild_question(
+            job, doc, a.label, parts, sum_marks([question.marks for question in selected_questions]), flags, a.id,
+            topic=next((question.topic for question in selected_questions if question.topic), None),
+            erase_applied=[box for question in selected_questions for box in question.erase_applied],
+            erase_status=status,
+            erase_manual=[box for question in selected_questions for box in question.erase_manual],
+            difficulty=hardest([question.difficulty for question in selected_questions]),
+            annotations=[annotation for question in selected_questions for annotation in question.annotations],
+            related_labels=list(dict.fromkeys(
+                label for question in selected_questions for label in (question.related_labels or [question.label])
+            )),
+            erase_white=[box for question in selected_questions for box in question.erase_white],
+            memo_links=memo_links if memo_links is not None else list(dict.fromkeys(
+                memo_id for question in selected_questions for memo_id in question.memo_links
+            )),
+        )
+    finally:
+        doc.close()
+    first_idx = next(i for i, question in enumerate(job.questions) if question.id == a.id)
+    job.questions[first_idx] = merged
+    job.questions = [
+        question for question in job.questions
+        if question.id == a.id or question.id not in question_id_set
+    ]
+    return merged
+
+
+async def merge_at(job: Job, idx: int, memo_links=None):
+    return await merge_questions(job, [job.questions[idx].id, job.questions[idx + 1].id], memo_links)
 
 
 @api.post("/jobs/{job_id}/questions/{qid}/merge-next")
@@ -566,7 +758,30 @@ async def merge_next(job_id: str, qid: str):
     _, la = await linked_targets(job, a.id)
     _, lb = await linked_targets(job, b.id)
     changed = []
+    memo_groups = {}
+    for linked_job, linked_question in la + lb:
+        if linked_job.meta.doc_type != "memo":
+            continue
+        group = memo_groups.setdefault(linked_job.id, (linked_job, []))
+        if linked_question.id not in group[1]:
+            group[1].append(linked_question.id)
+
+    merged_memo_ids = []
+    remapped_memo_ids = {}
+    for linked_job, linked_ids in memo_groups.values():
+        linked_id_set = set(linked_ids)
+        ordered_ids = [question.id for question in linked_job.questions if question.id in linked_id_set]
+        if not ordered_ids:
+            continue
+        merged_question = await merge_questions(linked_job, ordered_ids)
+        merged_memo_ids.append(merged_question.id)
+        remapped_memo_ids.update({linked_id: merged_question.id for linked_id in ordered_ids})
+        if len(ordered_ids) > 1:
+            changed.append(linked_job)
+
     for j, bq in lb:
+        if j.meta.doc_type == "memo":
+            continue
         aq = next((x for jj, x in la if jj.id == j.id), None)
         ii = next(i for i, x in enumerate(j.questions) if x.id == bq.id)
         if aq and ii > 0 and j.questions[ii - 1].id == aq.id:
@@ -576,7 +791,13 @@ async def merge_next(job_id: str, qid: str):
         else:
             continue
         changed.append(j)
-    await merge_at(job, idx)
+    memo_links = None
+    if a.memo_links or b.memo_links:
+        memo_links = list(dict.fromkeys(
+            remapped_memo_ids.get(memo_id, memo_id) for memo_id in a.memo_links + b.memo_links
+        ))
+        memo_links.extend(memo_id for memo_id in merged_memo_ids if memo_id not in memo_links)
+    await merge_at(job, idx, memo_links)
     await save_linked(changed, job.set_id)
     return await edit_and_return(job, job.set_id)
 

@@ -1,7 +1,6 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Scissors, Loader2 } from "lucide-react";
-import { getMe, exchangeSession, logout } from "@/lib/api";
+import { getMe, googleLoginUrl, logout } from "@/lib/api";
 import { AUTH } from "@/constants/testIds";
 
 const AuthCtx = createContext(null);
@@ -13,13 +12,7 @@ const Splash = () => (
   </div>
 );
 
-const signIn = () => {
-  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-  const redirectUrl = window.location.origin + "/";
-  window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-};
-
-const LoginScreen = () => (
+const LoginScreen = ({ onSignIn, error, sessionExpired }) => (
   <div data-testid={AUTH.loginScreen} className="min-h-screen bg-[var(--pc-bg)] text-[var(--pc-text)] font-body pc-grid-bg flex items-center">
     <div className="max-w-7xl w-full mx-auto px-6 lg:px-8 pc-rise">
       <div className="h-12 w-12 rounded-md bg-[var(--pc-amber)] text-[#0B0F19] grid place-items-center mb-10">
@@ -31,7 +24,9 @@ const LoginScreen = () => (
       <p className="mt-6 max-w-md text-sm sm:text-base text-[var(--pc-text2)]">
         PaperCut is a private workspace. Sign in with your Google account to open the shared past paper library.
       </p>
-      <button data-testid={AUTH.googleButton} onClick={signIn}
+      {sessionExpired && <p role="alert" className="mt-4 max-w-md text-sm text-amber-400">Your session expired. Sign in again to continue.</p>}
+      {error && <p role="alert" className="mt-4 max-w-md text-sm text-red-400">Google sign-in didn’t complete. Please try again, and check that this app is configured as an authorized OAuth redirect in Google Cloud.</p>}
+      <button data-testid={AUTH.googleButton} onClick={onSignIn}
         className="mt-10 inline-flex items-center gap-3 px-6 py-3 rounded-full bg-[var(--pc-amber)] text-[#0B0F19] font-semibold transition-transform duration-150 hover:-translate-y-0.5 active:translate-y-0">
         <svg viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true">
           <path fill="#0B0F19" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" />
@@ -42,35 +37,31 @@ const LoginScreen = () => (
   </div>
 );
 
-const AuthCallback = ({ onUser }) => {
-  const done = useRef(false);
-  const navigate = useNavigate();
-  const location = useLocation();
-  useEffect(() => {
-    if (done.current) return;
-    done.current = true;
-    const sid = new URLSearchParams(location.hash.slice(1)).get("session_id");
-    exchangeSession(sid)
-      .then((u) => onUser(u))
-      .catch(() => onUser(false))
-      .finally(() => navigate("/", { replace: true }));
-  }, [location.hash, navigate, onUser]);
-  return <Splash />;
-};
-
 export const AuthGate = ({ children }) => {
-  const location = useLocation();
   const [user, setUser] = useState(null);
-  const inCallback = location.hash?.includes("session_id=");
+  const [loginError, setLoginError] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
-    if (inCallback || user) return;
     getMe().then(setUser).catch(() => setUser(false));
-  }, [inCallback, user]);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth") === "error") {
+      setLoginError(true);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
 
-  if (inCallback) return <AuthCallback onUser={setUser} />;
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setSessionExpired(true);
+      setUser(false);
+    };
+    window.addEventListener("papercut:unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("papercut:unauthorized", handleUnauthorized);
+  }, []);
+
   if (user === null) return <Splash />;
-  if (!user) return <LoginScreen />;
+  if (!user) return <LoginScreen onSignIn={() => window.location.assign(googleLoginUrl())} error={loginError} sessionExpired={sessionExpired} />;
   const signOut = () => logout().finally(() => setUser(false));
   return <AuthCtx.Provider value={{ user, signOut }}>{children}</AuthCtx.Provider>;
 };

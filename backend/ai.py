@@ -2,7 +2,10 @@ import re
 import json
 import asyncio
 from core import logger
-from llm import ai_settings, resolve, complete, BudgetExceeded
+from llm import (
+    ai_settings, resolve, complete, BudgetExceeded,
+    is_invalid_api_key_error, invalid_api_key_message,
+)
 
 COMMON_RULES = """- Coordinates: y_start and y_end are integers 0-1000 relative to page height (0 = top edge, 1000 = bottom edge). Segments are in top-to-bottom order and do not overlap.
 - EXCLUDE page headers, footers, page numbers, "Copyright reserved", "Please turn over / Blaai om", exam centre / candidate boxes.
@@ -16,17 +19,18 @@ Find where every sub-question region starts and stops vertically on this page.
 
 Rules:
 - Split at SUB-QUESTION level: 1.1, 1.2, 2.1 ... Deeper parts (1.1.1, 1.1.2, (a), (b)) stay INSIDE their parent sub-question region (1.1). If a main question has no sub-questions, use the main number, e.g. "3".
-- NEVER merge or skip sub-questions: EVERY distinct sub-question number that starts on this page gets its OWN segment. First list them all in "labels_on_page" (top to bottom), then output exactly one segment per listed label (plus an optional leading "CONTINUED" segment).
+- Normally give every distinct sub-question its own segment. Exception: do NOT separate adjacent sub-questions when they depend on the same shared diagram/image/table/passage, or when a later part explicitly depends on an earlier answer (for example, "hence", "therefore", or "using your answer to 1.1"). In these cases, keep separate labeled segments but set "group_with_previous": true on each later segment that belongs in the same image. This keeps all source context together while preserving every question number.
 - Headings "QUESTION 1" / "VRAAG 1" and "SECTION A" / "AFDELING A" (+ section instructions) are NOT part of any segment: start the segment just BELOW them. Shared intro text, passages, diagrams or tables between the heading and the first sub-question belong to that FIRST sub-question.
 - Include diagrams, tables and answer options belonging to a sub-question. Keep round-bracket mark allocations like (3).
-- ANSWER SPACES must be LEFT OUT of the crop: ruled/dotted writing lines (______ or ......), empty answer boxes/frames, blank grids or tables the candidate must fill in, "Answer:" / "Antwoord:" blanks, and empty space reserved for working. End a segment ABOVE answer space at its bottom, and list every answer-space band (also ones between deeper parts like 1.1.1 and 1.1.2) in "answer_spaces" as [y_start, y_end]. Multiple-choice options, printed diagrams, given tables and graphs are NOT answer spaces.
+- ANSWER SPACES must be LEFT OUT of the crop: ruled/dotted writing lines (______ or ......), empty answer boxes/frames, blank grids or tables the candidate must fill in, "Answer:" / "Antwoord:" blanks, and empty space reserved for working. List every answer-space band (also ones between deeper parts like 1.1.1 and 1.1.2) in "answer_spaces" as [y_start, y_end]. Multiple-choice options, printed diagrams, given tables and graphs are NOT answer spaces.
+- If a question's printed mark allocation is far below its text because answer-writing space lies between them, do NOT end the question before the marks. Extend that question's segment through the printed marks, and list only the intervening blank answer area as an "answer_spaces" band. The cropper removes that blank band and stitches the question and marks together, so the marks appear beside the question without a large empty gap. Never include the printed marks inside an answer-space band.
 - "marks": total marks for that sub-question = sum of all round-bracket allocations like (2), (3) in it (including deeper parts). null if none visible.
 - ERASE via "exclude": (1) the sub-question's OWN number printed at its start (e.g. the "1.1" before the text; NOT the deeper 1.1.1 / (a) numbers); (2) "QUESTION n"/"VRAAG n"/"SECTION X" headings; (3) square-bracket question totals like [16]; (4) section totals like "TOTAL SECTION A: 50"; (5) paper totals like "TOTAL: 150" / "GRAND TOTAL". Segments should end above totals where possible.
 """ + COMMON_RULES + """
 - If the page has no questions (cover, instructions, information/formula sheet, blank page, answer sheet), return empty lists.
 
 Respond with ONLY JSON, no markdown:
-{"labels_on_page":["1.1","1.2"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null},{"label":"1.2","y_start":340,"y_end":420,"marks":3,"review":null}],"exclude":[[122,60,135,95],[425,880,440,930]],"answer_spaces":[[250,290]]}"""
+{"labels_on_page":["1.1","1.2"],"segments":[{"label":"1.1","y_start":120,"y_end":340,"marks":7,"review":null,"group_with_previous":false},{"label":"1.2","y_start":340,"y_end":420,"marks":3,"review":null,"group_with_previous":false}],"exclude":[[122,60,135,95],[425,880,440,930]],"answer_spaces":[[250,290]]}"""
 
 MEMO_PROMPT = """You are analysing ONE page image from a South African high school exam MARKING GUIDELINE / MEMORANDUM.
 Find where the answer/marking region for every sub-question starts and stops vertically on this page.
@@ -114,6 +118,9 @@ async def ask_json(prompt: str, img_b64: str, session_id: str) -> dict:
         except BudgetExceeded:
             raise
         except Exception as e:
+            if is_invalid_api_key_error(e):
+                logger.error("%s stopped: invalid API key for provider %s", session_id, cfg["provider"])
+                raise RuntimeError(invalid_api_key_message(cfg)) from e
             last_err = e
             logger.warning(f"{session_id} attempt {attempt} failed: {e}")
             await asyncio.sleep(1.5 * (attempt + 1))
@@ -186,7 +193,8 @@ async def detect_segments(img_b64: str, session_id: str, doc_type: str, topics=N
             out.append({"label": str(s.get("label", "CONTINUED")).strip(), "y0": y0, "y1": y1,
                         "marks": to_int(s.get("marks")), "review": str(review).strip() if review else None,
                         "topic": str(s["topic"]).strip() if s.get("topic") else None,
-                        "difficulty": norm_difficulty(s.get("difficulty"))})
+                        "difficulty": norm_difficulty(s.get("difficulty")),
+                        "group_with_previous": s.get("group_with_previous") is True})
     excl = [[max(0, min(1000, int(v))) for v in b] for b in data.get("exclude", []) if isinstance(b, list) and len(b) == 4]
     bands = [(int(b[0]), int(b[1])) for b in data.get("answer_spaces", []) if isinstance(b, list) and len(b) == 2 and int(b[1]) > int(b[0])]
     return cut_bands(sorted(out, key=lambda s: s["y0"]), bands), excl

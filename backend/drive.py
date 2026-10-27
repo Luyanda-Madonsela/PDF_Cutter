@@ -17,7 +17,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from core import db, get_object, logger
 from auth import require_user, User
 from models import PaperSet
-from jobs import load_set, set_jobs, compute_links, norm_label
+from jobs import load_set, set_jobs, compute_links, norm_label, ensure_school_test_number
 from catalogue import CATALOGUES, SUBJECT_ALIASES, catalogue_key, build_workbook
 from intl import QUALS, qual_for, catalogue_path, skeleton_paths, paper_path as intl_paper_path, YEARS
 
@@ -36,9 +36,14 @@ _tasks: Dict[str, asyncio.Task] = {}
 
 
 def _client_config():
+    required = ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_REDIRECT_URI")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise HTTPException(503, f"Google Drive is not configured: missing {', '.join(missing)}")
+    redirect_uri = os.environ["GOOGLE_DRIVE_REDIRECT_URI"]
     return {"web": {"client_id": os.environ["GOOGLE_CLIENT_ID"], "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [os.environ["GOOGLE_DRIVE_REDIRECT_URI"]]}}
+                    "redirect_uris": [redirect_uri]}}
 
 
 def _flow(scopes):
@@ -61,7 +66,7 @@ def folder_id_from(link: str) -> Optional[str]:
 async def drive_settings() -> dict:
     doc = await db.settings.find_one({"_id": "drive"}) or {}
     return {"root_id": doc.get("root_id", os.environ.get("DRIVE_ROOT_FOLDER_ID") or None),
-            "root_path": doc.get("root_path", os.environ["DRIVE_ROOT_PATH"])}
+            "root_path": doc.get("root_path", os.environ.get("DRIVE_ROOT_PATH", ""))}
 
 
 async def root_path() -> List[str]:
@@ -80,7 +85,7 @@ async def connect(user: User = Depends(require_user)):
     state = secrets.token_urlsafe(24)
     flow = _flow(SCOPES)
     url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="select_account consent",
-                                             state=state, login_hint=os.environ["GOOGLE_DRIVE_ACCOUNT"])
+                                     state=state, login_hint=user.email, code_challenge_method="S256")
     await db.drive_states.insert_one({"_id": state, "user_email": user.email, "code_verifier": flow.code_verifier,
                                       "created_at": datetime.now(timezone.utc)})
     return {"authorization_url": url}
@@ -260,7 +265,7 @@ class DriveWriter:
 
 
 # ---------- set -> Drive layout ----------
-def paper_folder(meta, root: List[str]) -> List[str]:
+def paper_folder(meta, root: List[str], test_number: Optional[int] = None) -> List[str]:
     subj = (meta.subject or "").strip()
     key = next((k for k, al in SUBJECT_ALIASES.items() if subj.lower() in al), None)
     if key == "physical-sciences" and meta.grade in ("7", "8", "9"):
@@ -268,8 +273,16 @@ def paper_folder(meta, root: List[str]) -> List[str]:
     base = [*root, meta.year or "Unknown Year", f"Grade {meta.grade}" if meta.grade else "Unknown Grade",
             SUBJECT_FOLDERS.get(key, subj or "Unknown Subject")]
     if getattr(meta, "school", ""):
-        return base + ["Misc", meta.school.strip()]
-    return base + [SESSION_FOLDERS.get(meta.session, "Misc"), PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
+        school_path = base + ["Misc", meta.school.strip()]
+        if test_number is not None:
+            school_path.append(f"Test_{test_number:02d}")
+        if (getattr(meta, "language", "") or "").strip().casefold() == "afrikaans":
+            school_path.append("Afrikaans")
+        return school_path
+    path = base + [SESSION_FOLDERS.get(meta.session, "Misc"), PROVINCE_FOLDERS.get(meta.province, meta.province or "DBE")]
+    if (getattr(meta, "language", "") or "").strip().casefold() == "afrikaans":
+        path.append("Afrikaans")
+    return path
 
 
 CAT_SUBJECT_FOLDERS = {"maths": "Mathematics", "maths-lit": "Mathematical Literacy", "physical-sciences": "Physical Sciences",
@@ -296,7 +309,29 @@ def plan_base(s: PaperSet, jobs, root: List[str]) -> List[str]:
     if src:
         return [f"id:{src['paper_folder_id']}"]
     q = qual_for(s.meta)
-    return intl_paper_path(q, s.meta, parent_of(root)) if q else paper_folder(s.meta, root)
+    if q:
+        path = intl_paper_path(q, s.meta, parent_of(root))
+        return path + (["Afrikaans"] if (s.meta.language or "").strip().casefold() == "afrikaans" else [])
+    return paper_folder(s.meta, root, s.school_test_number)
+
+
+def question_folder_name(question, questions) -> str:
+    label = str(question.label or "").strip()
+    number = re.search(r"\d+(?:\.\d+)*", label)
+    if number:
+        return f"Question_{number.group(0)}"
+
+    position = next((i for i, item in enumerate(questions) if item.id == question.id), len(questions))
+    parent_number = next(
+        (
+            match.group(0).split(".", 1)[0]
+            for previous in reversed(questions[:position])
+            if (match := re.search(r"\d+(?:\.\d+)*", str(previous.label or "")))
+        ),
+        str(question.order or 1),
+    )
+    sublabel = re.sub(r"[^A-Za-z0-9]+", "", label) or str(question.order or 1)
+    return f"Question_{parent_number}_({sublabel})"
 
 
 def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
@@ -316,7 +351,7 @@ def plan_uploads(s: PaperSet, jobs, root: List[str]) -> List[dict]:
         return out
     qroot = base + (["Questions"] if intl else ["Questions", f"Paper_{n}"])
     for q in qp.questions:
-        qdir = qroot + [f"Question_{norm_label(q.label) or q.label}"]
+        qdir = qroot + [question_folder_name(q, qp.questions)]
         out.append({"path": qdir + ["Question"], "name": q.filename, "storage": q.storage_path, "mime": "image/png", "replace": True})
         link = info["links"][q.id]
         refs = ([("Memo", link["memo"])] if link["memo"] else []) + [("Addendum", r) for r in link["addenda"]] + [("Errata", r) for r in link["errata"]]
@@ -343,6 +378,8 @@ async def run_send(set_id: str):
         if not svc:
             raise RuntimeError("Google Drive is not connected")
         s = await load_set(set_id)
+        if s and s.meta.school:
+            await ensure_school_test_number(s)
         jobs = await set_jobs(set_id)
         root = await root_path()
         items = plan_uploads(s, jobs, root)

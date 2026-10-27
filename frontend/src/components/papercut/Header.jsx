@@ -3,7 +3,7 @@ import { PC } from "@/constants/testIds";
 import { UserMenu } from "./UserMenu";
 import { AiBadge } from "./AiSettings";
 
-const MODES = [["single", "One paper"], ["bulk", "Bulk upload"], ["drive", "From Drive"]];
+const MODES = [["single", "One paper"], ["bulk", "Bulk upload"]];
 
 export const Header = ({ mode, onMode }) => (
   <header data-testid={PC.header} className="sticky top-0 z-30 border-b border-[var(--pc-border)] bg-[var(--pc-bg)]/80 backdrop-blur-md">

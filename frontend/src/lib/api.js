@@ -3,9 +3,20 @@ import axios from "axios";
 export const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const data = (r) => r.data;
 axios.defaults.withCredentials = true;
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const url = error.config?.url || "";
+    if (error.response?.status === 401 && !/\/api\/auth\/(me|logout)(?:\?|$)/.test(url)
+        && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("papercut:unauthorized"));
+    }
+    return Promise.reject(error);
+  },
+);
 
 export const getMe = () => axios.get(`${API}/auth/me`).then(data);
-export const exchangeSession = (session_id) => axios.post(`${API}/auth/session`, { session_id }).then(data);
+export const googleLoginUrl = () => `${API}/auth/google/login`;
 export const logout = () => axios.post(`${API}/auth/logout`);
 
 export const createSet = ({ qp, memo, addenda, errata }, onProgress) => {
@@ -34,7 +45,10 @@ export const retryJob = (id) => axios.post(`${API}/jobs/${id}/retry`);
 export const stopJob = (id) => axios.post(`${API}/jobs/${id}/stop`);
 export const deleteJob = (id) => axios.delete(`${API}/jobs/${id}`);
 export const updateQuestion = (id, qid, body) => axios.put(`${API}/jobs/${id}/questions/${qid}`, body).then(data);
+export const splitQuestion = (id, qid, split) => axios.post(`${API}/jobs/${id}/questions/${qid}/split`, split).then(data);
 export const reviewQuestion = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/review`).then(data);
+export const reviewAllQuestions = (setId) => axios.post(`${API}/sets/${setId}/review-all`).then(data);
+export const saveAnnotations = (id, qid, annotations) => axios.put(`${API}/jobs/${id}/questions/${qid}/annotations`, { annotations }).then(data);
 export const mergeNext = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${qid}/merge-next`).then(data);
 export const deleteQuestion = (id, qid) => axios.delete(`${API}/jobs/${id}/questions/${qid}`).then(data);
 export const imageUrl = (jobId, qid) => `${API}/jobs/${jobId}/images/${qid}`;
@@ -61,6 +75,7 @@ export const recropPreview = () => axios.get(`${API}/sets/recrop-preview`).then(
 export const recropAll = () => axios.post(`${API}/sets/recrop-all`).then(data);
 export const getAiSettings = () => axios.get(`${API}/ai/settings`).then(data);
 export const saveAiSettings = (body) => axios.put(`${API}/ai/settings`, body).then(data);
+export const getOpenrouterModels = () => axios.get(`${API}/ai/models/openrouter`).then(data);
 export const getAiUsage = (days) => axios.get(`${API}/ai/usage`, { params: { days } }).then(data);
 export const setAiPrice = (model, input, output) => axios.put(`${API}/ai/prices`, { model, input, output }).then(data);
 export const getBudget = () => axios.get(`${API}/ai/budget`).then(data);
@@ -72,5 +87,6 @@ export const undoCrop = (id, qid) => axios.post(`${API}/jobs/${id}/questions/${q
 export const recropSet = (id) => axios.post(`${API}/sets/${id}/recrop`).then(data);
 export const catalogueUrl = (key) => `${API}/catalogues/${key}/download`;
 export const getErase = (id, qid) => axios.get(`${API}/jobs/${id}/questions/${qid}/erase`).then(data);
-export const decideErase = (id, qid, boxes, manual = []) => axios.post(`${API}/jobs/${id}/questions/${qid}/erase`, { boxes, manual }).then(data);
+export const decideErase = (id, qid, boxes, manual = [], white = []) => axios.post(`${API}/jobs/${id}/questions/${qid}/erase`, { boxes, manual, white }).then(data);
+export const updateMemoLinks = (id, qid, memoQids) => axios.put(`${API}/jobs/${id}/questions/${qid}/memo-links`, { memo_qids: memoQids }).then(data);
 export const approveAllErases = (setId) => axios.post(`${API}/sets/${setId}/erase-approve-all`).then(data);

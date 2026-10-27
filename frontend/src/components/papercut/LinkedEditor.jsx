@@ -3,9 +3,10 @@ import { toast } from "sonner";
 import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
 import { DifficultyPicker } from "./DifficultyPicker";
+import { Annotations } from "./Annotations";
 import { imageUrl, updateQuestion, decideErase, undoCrop, DIFFICULTY } from "@/lib/api";
 
-const MODES = [["image", "Image"], ["erase", "Erase"], ["adjust", "Adjust crop"]];
+const MODES = [["image", "Image"], ["annotate", "Annotate"], ["erase", "Erase"], ["adjust", "Adjust crop"]];
 
 export const LinkedEditor = ({ refItem, documents, onSetChange, kind }) => {
   const [mode, setMode] = useState("image");
@@ -27,8 +28,9 @@ export const LinkedEditor = ({ refItem, documents, onSetChange, kind }) => {
         ))}
       </div>
       {mode === "image" && <div className="rounded-md bg-white"><img src={`${imageUrl(doc.id, q.id)}?v=${q.storage_path.slice(-12)}`} alt={q.label} className="w-full" /></div>}
+      {mode === "annotate" && <Annotations doc={doc} question={q} onSetChange={onSetChange} />}
       {mode === "erase" && (
-        <EraseReview doc={doc} q={q} onDecide={(boxes, manual) => act(() => decideErase(doc.id, q.id, boxes, manual), boxes.length + manual.length ? "Erase applied" : "Original kept")} />
+        <EraseReview doc={doc} q={q} onDecide={(boxes, manual, white) => act(() => decideErase(doc.id, q.id, boxes, manual, white), boxes.length + manual.length + white.length ? "Erase applied" : "Original kept")} />
       )}
       {mode === "adjust" && (<>
         <DifficultyPicker testId={`${tid}-difficulty`} value={q.difficulty}

@@ -15,7 +15,7 @@ export const QuestionCard = ({ jobId, q, onOpen, index, link }) => (
     {q.topic && <div data-testid={`question-topic-${q.order}`} className="px-3 pt-2 text-[11px] font-mono text-sky-300 truncate border-t border-[var(--pc-border)]">{q.topic}</div>}
     <div className={`p-3 flex items-center justify-between gap-2 ${q.topic ? "" : "border-t border-[var(--pc-border)]"}`}>
       <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap">
-        <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {q.label}</span>
+        <span data-testid={`question-label-${q.order}`} className="pc-badge">Q {(q.related_labels?.length ? q.related_labels : [q.label]).join(" + ")}</span>
         {q.marks != null && <span data-testid={`question-marks-${q.order}`} className="font-mono text-[11px] text-[var(--pc-text2)]">{q.marks}m</span>}
         {DIFFICULTY[q.difficulty] && <span data-testid={`question-difficulty-${q.order}`} className={`px-1.5 py-0.5 rounded border font-mono text-[10px] ${DIFFICULTY[q.difficulty][1]}`}>{DIFFICULTY[q.difficulty][0]}</span>}
       </span>

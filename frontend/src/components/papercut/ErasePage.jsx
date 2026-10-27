@@ -23,7 +23,7 @@ const resize = ([p, y0, x0, y1, x1], mode, dy, dx) => {
   return b;
 };
 
-export const ErasePage = ({ jobId, page, parts, proposals, selected, onToggle, manual, onAdd, onRemove, onUpdate }) => {
+export const ErasePage = ({ jobId, page, parts, proposals, selected, onToggle, manual, white, onAdd, onRemove, onUpdate, onWhiteRemove, onWhiteUpdate }) => {
   const ref = useRef(null);
   const [drag, setDrag] = useState(null);
   const at = (e) => {
@@ -39,11 +39,11 @@ export const ErasePage = ({ jobId, page, parts, proposals, selected, onToggle, m
     const b = [page, Math.min(ya, yb), Math.min(xa, xb), Math.max(ya, yb), Math.max(xa, xb)];
     if (b[3] - b[1] >= 4 && b[4] - b[2] >= 4) onAdd(b);
   };
-  const edit = (i, box, mode) => (e) => {
+  const edit = (i, box, mode, onChange = onUpdate) => (e) => {
     e.preventDefault();
     e.stopPropagation();
     const [sy, sx] = at(e);
-    const move = (ev) => { const [y, x] = at(ev); onUpdate(i, resize(box, mode, y - sy, x - sx)); };
+    const move = (ev) => { const [y, x] = at(ev); onChange(i, resize(box, mode, y - sy, x - sx)); };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -71,6 +71,20 @@ export const ErasePage = ({ jobId, page, parts, proposals, selected, onToggle, m
             ))}
             <button data-testid={`erase-manual-remove-${i}`} onPointerDown={(e) => e.stopPropagation()} onClick={() => onRemove(i)} title="Remove this area"
               className="absolute -top-3 -right-6 h-5 w-5 grid place-items-center rounded-full bg-[#0B0F19] text-[var(--pc-amber)] border border-[var(--pc-amber)]">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        {white.map(({ b, i }) => (
+          <div key={`white-${i}`} data-testid={`erase-white-${i}`} onPointerDown={edit(i, b, "move", onWhiteUpdate)} title="This area will be filled with white; drag to move or resize"
+            className="absolute border-2 border-fuchsia-500 bg-fuchsia-500/35 cursor-move" style={pos(b)}>
+            <span className="absolute left-1 top-0.5 text-[10px] font-bold text-fuchsia-950">WHITE</span>
+            {HANDLES.map(([m, cls]) => (
+              <span key={m} data-testid={`erase-white-handle-${m}-${i}`} onPointerDown={edit(i, b, m, onWhiteUpdate)}
+                className={`absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm bg-fuchsia-500 border border-[#0B0F19] ${cls}`} />
+            ))}
+            <button data-testid={`erase-white-remove-${i}`} onPointerDown={(e) => e.stopPropagation()} onClick={() => onWhiteRemove(i)} title="Remove this white-out area"
+              className="absolute -top-3 -right-6 h-5 w-5 grid place-items-center rounded-full bg-[#0B0F19] text-fuchsia-300 border border-fuchsia-500">
               <X className="h-3 w-3" />
             </button>
           </div>

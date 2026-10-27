@@ -41,7 +41,7 @@ const SetItem = ({ s, active, onSelect, onDelete }) => {
   );
 };
 
-export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete, onRefresh }) => {
+export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete, onRefresh, error, loading }) => {
   const [filter, setFilter] = useState("all");
   const shown = sets.filter((s) => matches(s, filter));
   return (
@@ -63,7 +63,9 @@ export const QueuePanel = ({ sets, counts, activeId, onSelect, onDelete, onRefre
             className={`px-2 py-1 rounded text-xs font-mono transition-colors ${filter === k ? "bg-[var(--pc-amber)] text-[#0B0F19]" : "text-[var(--pc-text2)] hover:bg-[var(--pc-surface2)]"}`}>{l}</button>
         ))}
       </div>
-      {shown.length === 0 && <p data-testid={PC.historyEmpty} className="text-sm text-[var(--pc-muted)]">Nothing here yet.</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-400">{error}</p>}
+      {!error && loading && <p className="text-sm text-[var(--pc-muted)]">Loading paper sets…</p>}
+      {!error && !loading && shown.length === 0 && <p data-testid={PC.historyEmpty} className="text-sm text-[var(--pc-muted)]">Nothing here yet.</p>}
       <ul className="space-y-1 max-h-[60vh] overflow-auto -mx-2">
         {shown.map((s) => <SetItem key={s.id} s={s} active={activeId === s.id} onSelect={onSelect} onDelete={onDelete} />)}
       </ul>

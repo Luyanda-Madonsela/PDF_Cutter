@@ -18,7 +18,7 @@ def page_jpeg(doc, p: int) -> bytes:
     return doc[p].get_pixmap(matrix=pymupdf.Matrix(AI_ZOOM, AI_ZOOM)).tobytes("jpeg", jpg_quality=85)
 
 
-def magic_erase(img: Image.Image, boxes) -> Image.Image:
+def magic_erase(img: Image.Image, boxes, white_boxes=None) -> Image.Image:
     """Fill each box with the median colour of its surroundings so shaded backgrounds stay seamless."""
     draw = ImageDraw.Draw(img)
     W, H = img.width, img.height
@@ -27,6 +27,9 @@ def magic_erase(img: Image.Image, boxes) -> Image.Image:
         ring = img.crop((max(0, int(bx[0]) - 10), max(0, int(bx[1]) - 10), min(W, int(bx[2]) + 10), min(H, int(bx[3]) + 10)))
         fill = tuple(int(v) for v in ImageStat.Stat(ring).median)
         draw.rectangle(bx, fill=fill)
+    for y0, x0, y1, x1 in white_boxes or []:
+        bx = [W * max(0, x0) / 1000, H * max(0, y0) / 1000, W * min(1000, x1) / 1000, H * min(1000, y1) / 1000]
+        draw.rectangle(bx, fill="white")
     return img
 
 
@@ -52,12 +55,13 @@ def union_col(col: Optional[List[int]], b: Optional[List[int]]) -> Optional[List
     return [min(col[0], b[0]), max(col[1], b[1])] if col else list(b)
 
 
-def crop_parts(doc, parts, cache: dict, masks: list) -> List[Image.Image]:
+def crop_parts(doc, parts, cache: dict, masks: list, white_masks=None) -> List[Image.Image]:
     crops = []
     for part in parts:
         if part.page not in cache:
             boxes = masks[part.page] if part.page < len(masks) else []
-            cache[part.page] = magic_erase(render_page(doc, part.page), boxes)
+            white_boxes = white_masks[part.page] if white_masks and part.page < len(white_masks) else []
+            cache[part.page] = magic_erase(render_page(doc, part.page), boxes, white_boxes)
         im = cache[part.page]
         crops.append(trim_vertical(im.crop((0, int(im.height * part.y0 / 1000), im.width, int(im.height * part.y1 / 1000)))))
     return crops

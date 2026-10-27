@@ -8,6 +8,7 @@ import { SetView } from "@/components/papercut/SetView";
 import { QueuePanel } from "@/components/papercut/QueuePanel";
 import { CataloguesPanel } from "@/components/papercut/CataloguesPanel";
 import { DriveImport } from "@/components/papercut/DriveImport";
+import { DriveConnect } from "@/components/papercut/DriveConnect";
 import { createSet, uploadDoc, listSets, getSet, deleteSet, deleteJob, retryJob, stopJob, ACTIVE_DOC } from "@/lib/api";
 
 const UPLOAD_CONCURRENCY = 3;
@@ -17,11 +18,31 @@ function App() {
   const [set, setSet] = useState(null);
   const [sets, setSets] = useState([]);
   const [counts, setCounts] = useState({});
+  const [setsLoaded, setSetsLoaded] = useState(false);
+  const [setsError, setSetsError] = useState("");
   const [bulk, setBulk] = useState(null);
+  const [selectedSetId, setSelectedSetId] = useState(() => localStorage.getItem("pc-selected-set"));
 
-  const changeMode = (m) => { setMode(m); localStorage.setItem("pc-mode", m); setSet(null); };
-  const refresh = useCallback(() => listSets().then((d) => { setSets(d.sets); setCounts(d.counts); }).catch(() => {}), []);
+  const changeMode = (m) => { setMode(m); localStorage.setItem("pc-mode", m); };
+  const refresh = useCallback(() => listSets()
+    .then((d) => { setSets(d.sets); setCounts(d.counts); setSetsError(""); })
+    .catch((error) => { setSetsError(error.response?.data?.detail || "Could not load paper sets. Check the connection and try refreshing."); })
+    .finally(() => setSetsLoaded(true)), []);
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!selectedSetId) return;
+    let current = true;
+    getSet(selectedSetId).then((value) => { if (current) setSet(value); }).catch((error) => {
+      if (!current) return;
+      if (error.response?.status === 404) {
+        localStorage.removeItem("pc-selected-set");
+        setSelectedSetId(null);
+        setSet(null);
+      }
+    });
+    return () => { current = false; };
+  }, [selectedSetId]);
 
   const driveBusy = (s) => ["queued", "uploading"].includes(s?.drive?.status);
   const queueActive = (counts.sorting || 0) + (counts.processing || 0) > 0 || sets.some(driveBusy);
@@ -39,7 +60,15 @@ function App() {
   }, [setActive, set?.id]);
 
   const submitSingle = async (files) => {
-    try { const s = await createSet(files); setSet(s); refresh(); toast.success("Paper set queued"); return true; }
+    try {
+      const s = await createSet(files);
+      localStorage.setItem("pc-selected-set", s.id);
+      setSelectedSetId(s.id);
+      setSet(s);
+      refresh();
+      toast.success("Paper set queued");
+      return true;
+    }
     catch (e) { toast.error(e.response?.data?.detail || "Upload failed"); return false; }
   };
 
@@ -61,7 +90,11 @@ function App() {
     setBulk(null);
   };
 
-  const openSet = (id) => getSet(id).then(setSet).catch(() => toast.error("Could not open set"));
+  const openSet = (id) => {
+    localStorage.setItem("pc-selected-set", id);
+    setSelectedSetId(id);
+    return getSet(id).then(setSet).catch(() => toast.error("Could not open set"));
+  };
   const reload = () => { if (set) openSet(set.id); refresh(); };
   const docHandlers = {
     onRetry: async (id) => { await retryJob(id); reload(); },
@@ -76,7 +109,12 @@ function App() {
       reload();
     },
   };
-  const removeSet = async (id) => { await deleteSet(id); if (set?.id === id) setSet(null); refresh(); };
+  const resetSet = () => { localStorage.removeItem("pc-selected-set"); setSelectedSetId(null); setSet(null); };
+  const removeSet = async (id) => {
+    await deleteSet(id);
+    if (set?.id === id) resetSet();
+    refresh();
+  };
   const onSetChange = (s) => { if (s?.documents) setSet(s); refresh(); };
 
   return (
@@ -90,11 +128,18 @@ function App() {
               Every question,<br /><span className="text-[var(--pc-amber)]">cut clean.</span>
             </h1>
           )}
-          {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : mode === "drive" ? <DriveImport onImported={refresh} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
-          {set && <SetView set={set} onReset={() => setSet(null)} onSetChange={onSetChange} docHandlers={docHandlers} />}
+          {!set && (mode === "single" ? <SingleUpload onSubmit={submitSingle} /> : <UploadPanel onUpload={uploadBulk} bulk={bulk} />)}
+          {!set && mode === "single" && (
+            <>
+              <DriveConnect inline />
+              <DriveImport onImported={refresh} />
+            </>
+          )}
+          {set && <SetView set={set} onReset={resetSet} onSetChange={onSetChange} docHandlers={docHandlers} />}
         </div>
         <div className="lg:col-span-3 space-y-6">
-          <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} onRefresh={reload} />
+          <QueuePanel sets={sets} counts={counts} activeId={set?.id} onSelect={openSet} onDelete={removeSet} onRefresh={reload}
+            error={setsError} loading={!setsLoaded} />
           <CataloguesPanel refreshKey={`${counts.done || 0}-${set?.status}`} />
         </div>
       </main>

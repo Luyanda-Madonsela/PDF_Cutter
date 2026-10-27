@@ -7,7 +7,8 @@ import { CropEditor } from "./CropEditor";
 import { EraseReview } from "./EraseReview";
 import { LinkedList } from "./LinkedEditor";
 import { DifficultyPicker } from "./DifficultyPicker";
-import { imageUrl, updateQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop, DIFFICULTY } from "@/lib/api";
+import { Annotations } from "./Annotations";
+import { imageUrl, updateQuestion, updateMemoLinks, splitQuestion, mergeNext, deleteQuestion, reviewQuestion, decideErase, undoCrop, DIFFICULTY } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 
 const ImgBox = ({ src, alt }) => (
@@ -29,10 +30,18 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
   const [marks, setMarks] = useState("");
   const [topic, setTopic] = useState("");
   const [difficulty, setDifficulty] = useState("");
+  const [selectedMemoIds, setSelectedMemoIds] = useState([]);
   const [tab, setTab] = useState("question");
   useEffect(() => { setLabel(q?.label || ""); setMarks(q?.marks ?? ""); setTopic(q?.topic || ""); setDifficulty(q?.difficulty || ""); }, [q?.label, q?.marks, q?.topic, q?.difficulty]);
   const isQp = doc?.meta.doc_type === "question_paper";
+  const labels = q?.related_labels?.length ? q.related_labels : q ? [q.label] : [];
+  const memoRefs = link?.memos?.length ? link.memos : link?.memo ? [link.memo] : [];
+  const memoDoc = documents.find((document) => document.meta.doc_type === "memo");
+  const memoQuestions = memoDoc?.questions || [];
   useEffect(() => { setTab("question"); }, [qid]);
+  useEffect(() => {
+    setSelectedMemoIds(q?.memo_links?.length ? q.memo_links : memoRefs.map((ref) => ref.qid));
+  }, [q?.id, q?.memo_links, link]);
   const dirty = q && (label.trim() !== q.label || String(marks) !== String(q.marks ?? "") || topic !== (q.topic || "") || difficulty !== (q.difficulty || ""));
   const flags = link ? link.flags : q && !q.reviewed ? q.flags : [];
 
@@ -49,7 +58,7 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
           <>
             <div className="flex items-center justify-between gap-3 pr-8 flex-wrap">
               <div>
-                <DialogTitle className="font-heading text-xl">Q{q.label}</DialogTitle>
+                <DialogTitle className="font-heading text-xl">Q{labels.join(" + ")}</DialogTitle>
                 <DialogDescription className="text-xs font-mono text-[var(--pc-muted)]">Pages {q.pages.join(", ")}{q.marks != null ? ` · ${q.marks} marks` : ""}{q.difficulty ? ` · ${DIFFICULTY[q.difficulty]?.[0] || q.difficulty}` : ""}</DialogDescription>
               </div>
               <a data-testid={PC.lightboxDownload} href={imageUrl(doc.id, q.id) + v} download={q.filename} className="pc-btn-secondary text-xs font-mono break-all"><Download className="h-4 w-4 shrink-0" /> {q.filename}</a>
@@ -58,30 +67,69 @@ export const QuestionDialog = ({ doc, link, qid, onClose, onSetChange, topics, d
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className="bg-[var(--pc-surface2)] flex-wrap h-auto">
                 <TabsTrigger data-testid={PC.tabQuestion} value="question">Image</TabsTrigger>
-                {link?.memo && <TabsTrigger data-testid={PC.tabPartner} value="memo">Memo</TabsTrigger>}
+                <TabsTrigger data-testid="lightbox-tab-annotations" value="annotations">Annotate</TabsTrigger>
+                {(memoRefs.length > 0 || memoDoc) && <TabsTrigger data-testid={PC.tabPartner} value="memo">Memo{memoRefs.length > 1 ? ` (${memoRefs.length})` : ""}</TabsTrigger>}
                 {link?.addenda?.length > 0 && <TabsTrigger data-testid="lightbox-tab-addendum" value="addendum">Addendum ({link.addenda.length})</TabsTrigger>}
                 {link?.errata?.length > 0 && <TabsTrigger data-testid="lightbox-tab-errata" value="errata">Errata ({link.errata.length})</TabsTrigger>}
                 <TabsTrigger data-testid="lightbox-tab-erase" value="erase">Erase{q.erase_status === "pending" ? " (needs approval)" : ""}</TabsTrigger>
                 <TabsTrigger data-testid={PC.tabAdjust} value="adjust">Adjust crop</TabsTrigger>
               </TabsList>
               <TabsContent value="question"><ImgBox src={imageUrl(doc.id, q.id) + v} alt={q.label} /></TabsContent>
-              {link?.memo && <TabsContent value="memo"><LinkedList refs={[link.memo]} kind="memo" documents={documents} onSetChange={onSetChange} /></TabsContent>}
+              <TabsContent value="annotations"><Annotations doc={doc} question={q} onSetChange={onSetChange} /></TabsContent>
+              {(memoRefs.length > 0 || memoDoc) && <TabsContent value="memo">
+                <div className="space-y-3">
+                  {memoRefs.length > 0
+                    ? <LinkedList refs={memoRefs} kind="memo" documents={documents} onSetChange={onSetChange} />
+                    : <p className="text-sm text-[var(--pc-muted)]">No memo answer was matched automatically. Select the correct answer below.</p>}
+                  {memoQuestions.length > 0 && (
+                    <div className="space-y-3 border-t border-[var(--pc-border)] pt-3">
+                      <p className="text-sm font-medium">Choose memo answers for Q{labels.join(" + ")}</p>
+                      <div className="max-h-48 overflow-auto space-y-1">
+                        {memoQuestions.map((memoQuestion) => (
+                          <label key={memoQuestion.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-[var(--pc-surface2)] text-sm">
+                            <input type="checkbox" checked={selectedMemoIds.includes(memoQuestion.id)}
+                              onChange={(event) => setSelectedMemoIds((ids) => event.target.checked
+                                ? [...ids, memoQuestion.id]
+                                : ids.filter((id) => id !== memoQuestion.id))} />
+                            <span className="font-mono">Q{memoQuestion.label}</span>
+                            <span className="text-xs text-[var(--pc-muted)]">{memoQuestion.filename}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button data-testid="memo-links-save" disabled={!q || selectedMemoIds.length === 0}
+                          onClick={() => act(() => updateMemoLinks(doc.id, q.id, selectedMemoIds), "Memo answers linked")}
+                          className="pc-btn-primary text-sm disabled:opacity-40">Save memo links</button>
+                        {q?.memo_links?.length > 0 && (
+                          <button data-testid="memo-links-auto" onClick={() => act(() => updateMemoLinks(doc.id, q.id, []), "Automatic memo matching restored")}
+                            className="pc-btn-secondary text-sm">Use automatic matching</button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>}
               {link?.addenda?.length > 0 && <TabsContent value="addendum"><LinkedList refs={link.addenda} kind="addendum" documents={documents} onSetChange={onSetChange} /></TabsContent>}
               {link?.errata?.length > 0 && <TabsContent value="errata"><LinkedList refs={link.errata} kind="errata" documents={documents} onSetChange={onSetChange} /></TabsContent>}
               <TabsContent value="erase">
-                <EraseReview doc={doc} q={q} onDecide={(boxes, manual) => act(() => decideErase(doc.id, q.id, boxes, manual), boxes.length + manual.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
+                <EraseReview doc={doc} q={q} onDecide={(boxes, manual, white) => act(() => decideErase(doc.id, q.id, boxes, manual, white), boxes.length + manual.length + white.length ? "Erase applied" : "Original kept").then(() => setTab("question"))} />
               </TabsContent>
               <TabsContent value="adjust">
                 <DifficultyPicker testId="crop-difficulty" value={q.difficulty}
                   onPick={(d) => act(() => updateQuestion(doc.id, q.id, { difficulty: d }), `Difficulty set to ${DIFFICULTY[d][0]}`)} />
                 <CropEditor key={q.storage_path} jobId={doc.id} question={q} totalPages={doc.total_pages}
                   onSave={(parts) => act(() => updateQuestion(doc.id, q.id, { parts }), "Crop updated").then(() => setTab("question"))}
+                  onSplit={isQp ? (split) => act(() => splitQuestion(doc.id, q.id, split), "Question split").then(() => setTab("question")) : null}
                   onUndoSaved={() => act(() => undoCrop(doc.id, q.id), "Previous crop restored")} />
               </TabsContent>
             </Tabs>
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--pc-border)]">
-              <input data-testid={PC.labelInput} value={label} onChange={(e) => setLabel(e.target.value)}
-                className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
+              {labels.length === 1 ? (
+                <input data-testid={PC.labelInput} value={label} onChange={(e) => setLabel(e.target.value)}
+                  className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
+              ) : (
+                <span className="px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm" title="Grouped questions keep their original labels together">{labels.join(" + ")}</span>
+              )}
               <input data-testid="question-marks-input" type="number" min="0" value={marks} placeholder="marks" onChange={(e) => setMarks(e.target.value)}
                 className="w-24 px-3 py-2 rounded-md bg-[var(--pc-surface2)] border border-[var(--pc-border)] font-mono text-sm focus:outline-none focus:border-[var(--pc-amber)]" />
               {isQp && topics.length > 0 && (

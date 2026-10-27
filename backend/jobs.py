@@ -2,9 +2,12 @@ import re
 import uuid
 import base64
 import asyncio
+import hashlib
+import json
 from pathlib import Path
 from typing import List, Optional
 import pymupdf
+from pymongo import ReturnDocument
 from core import db, logger, put_object, get_object, APP_NAME
 from models import Job, JobMeta, Question, Part, PaperSet, DocSummary
 from llm import BudgetExceeded
@@ -149,6 +152,29 @@ async def set_fields(job_id: str, **fields):
     await db.jobs.update_one({"_id": job_id}, {"$set": fields})
 
 
+def school_test_scope(meta: JobMeta) -> str:
+    values = [getattr(meta, key, "") or "" for key in ("school", "year", "grade", "subject")]
+    normalized = [value.strip().casefold() for value in values]
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+async def next_school_test_number(meta: JobMeta) -> int:
+    scope = school_test_scope(meta)
+    counter = await db.school_test_counters.find_one_and_update(
+        {"_id": scope}, {"$inc": {"value": 1}}, upsert=True, return_document=ReturnDocument.AFTER
+    )
+    return int(counter["value"])
+
+
+async def ensure_school_test_number(s: PaperSet) -> Optional[int]:
+    if not s.meta.school:
+        return None
+    if s.school_test_number is None:
+        s.school_test_number = await next_school_test_number(s.meta)
+        await db.sets.update_one({"_id": s.id}, {"$set": {"school_test_number": s.school_test_number}})
+    return s.school_test_number
+
+
 # ---------- linking ----------
 def pick(jobs: List[Job], t: str) -> List[Job]:
     return [j for j in jobs if j.meta.doc_type == t]
@@ -162,19 +188,27 @@ def compute_links(jobs: List[Job]) -> dict:
     if not qp:
         return {"links": links, "extras": extras, "qp_id": None}
     for q in qp.questions:
-        links[q.id] = {"memo": None, "addenda": [], "errata": [], "flags": []}
-    qnorm = [(q, norm_label(q.label)) for q in qp.questions]
+        links[q.id] = {"memo": None, "memos": [], "addenda": [], "errata": [], "flags": []}
+    qnorm = [(q, [norm_label(label) for label in (q.related_labels or [q.label])]) for q in qp.questions]
 
     if memo:
         by_label = {}
+        by_id = {mq.id: mq for mq in memo.questions}
         for mq in memo.questions:
             by_label.setdefault(norm_label(mq.label), mq)
         used = set()
-        for q, n in qnorm:
-            mq = by_label.get(n)
-            if mq:
+        for q, labels in qnorm:
+            if q.memo_links:
+                selected = [by_id[qid] for qid in q.memo_links if qid in by_id]
+            else:
+                selected = [by_label[n] for n in labels if n in by_label]
+            for mq in selected:
+                if mq.id in used:
+                    continue
                 used.add(mq.id)
-                links[q.id]["memo"] = {"job_id": memo.id, "qid": mq.id}
+                links[q.id]["memos"].append({"job_id": memo.id, "qid": mq.id, "label": mq.label})
+            if links[q.id]["memos"]:
+                links[q.id]["memo"] = links[q.id]["memos"][0]
         extras["memo_unmatched"] = [{"job_id": memo.id, "qid": mq.id, "label": mq.label} for mq in memo.questions if mq.id not in used]
 
     for kind, key in (("addendum", "addenda"), ("errata", "errata")):
@@ -187,7 +221,7 @@ def compute_links(jobs: List[Job]) -> dict:
                 if not re.match(r"^\d", n):
                     extras["general"].append(ref)
                     continue
-                hits = [q for q, qn in qnorm if qn == n or qn.startswith(n + ".") or n.startswith(qn + ".")]
+                hits = [q for q, labels in qnorm if any(qn == n or qn.startswith(n + ".") or n.startswith(qn + ".") for qn in labels)]
                 for q in hits:
                     links[q.id][key].append(ref)
                 if not hits:
@@ -197,7 +231,7 @@ def compute_links(jobs: List[Job]) -> dict:
         if q.reviewed:
             continue
         f = list(q.flags)
-        if memo and not links[q.id]["memo"]:
+        if memo and not links[q.id]["memos"]:
             f.append("No matching memo answer found")
         links[q.id]["flags"] = f
     return {"links": links, "extras": extras, "qp_id": qp.id}
@@ -251,7 +285,29 @@ async def refresh_set(set_id: str):
 
 
 def compatible(a: JobMeta, b: JobMeta) -> bool:
-    return all(not getattr(a, k) or not getattr(b, k) or getattr(a, k).lower() == getattr(b, k).lower() for k in SOFT_FIELDS)
+    province_matches = not a.province or not b.province or a.province.lower() == b.province.lower()
+    # A missing language is the legacy/default English version; never combine English
+    # and Afrikaans question papers into a single set.
+    language_a = (a.language or "English").strip().casefold()
+    language_b = (b.language or "English").strip().casefold()
+    return province_matches and language_a == language_b
+
+
+async def related_school_test_number(meta: JobMeta) -> Optional[int]:
+    """Reuse a test number when the opposite-language version of this school test exists."""
+    if not meta.school:
+        return None
+    query = {"is_deleted": False, "mode": "bulk", "school_test_number": {"$ne": None}}
+    for key in ("school", "year", "grade", "subject", "term", "assessment", "paper"):
+        value = getattr(meta, key, "") or ""
+        query[f"meta.{key}"] = {"$regex": f"^{re.escape(value)}$", "$options": "i"}
+    matches = []
+    async for doc in db.sets.find(query):
+        candidate = PaperSet.from_mongo(doc)
+        if candidate.meta.language.strip().casefold() != (meta.language or "English").strip().casefold():
+            if any(item.doc_type == "question_paper" for item in candidate.docs):
+                matches.append(candidate.school_test_number)
+    return matches[0] if len(matches) == 1 else None
 
 
 async def assign_set(job: Job) -> str:
@@ -271,6 +327,9 @@ async def assign_set(job: Job) -> str:
                     await update_set_meta(s, m)
                 return s.id
     s = PaperSet(meta=m.model_copy(), mode="bulk")
+    s.school_test_number = await related_school_test_number(m) or (
+        await next_school_test_number(m) if m.school else None
+    )
     s.base_name = set_base_name(s.meta, job.filename)
     await db.sets.insert_one(s.to_mongo())
     return s.id
@@ -327,16 +386,19 @@ def merge_groups(page_segs: list) -> list:
         for s in segs:
             label = s["label"]
             is_cont = label.upper() in ("CONTINUED", "CONT", "") or (groups and groups[-1]["label"] == label)
+            join_previous = bool(s.get("group_with_previous")) and bool(groups)
             part = Part(page=p, y0=s["y0"], y1=s["y1"])
-            if is_cont and groups:
+            if (is_cont or join_previous) and groups:
                 g = groups[-1]
             elif not is_cont:
-                g = {"label": label, "parts": [], "marks": [], "flags": [], "topic": None, "difficulty": None}
+                g = {"label": label, "related_labels": [label], "parts": [], "marks": [], "flags": [], "topic": None, "difficulty": None}
                 groups.append(g)
             else:
                 continue
             g["parts"].append(part)
             g["marks"].append(s.get("marks"))
+            if label.upper() not in ("CONTINUED", "CONT", "") and label not in g["related_labels"]:
+                g["related_labels"].append(label)
             g["topic"] = g["topic"] or s.get("topic")
             g["difficulty"] = g["difficulty"] or s.get("difficulty")
             if s.get("review"):
@@ -349,15 +411,34 @@ def sum_marks(values):
     return sum(vals) if vals else None
 
 
+def split_parts(parts: List[Part], page: int, y: int) -> tuple[List[Part], List[Part]]:
+    if sum(part.page == page and part.y0 < y < part.y1 for part in parts) != 1:
+        raise ValueError("The split line must be inside exactly one crop region")
+    first, second = [], []
+    for part in parts:
+        if part.page < page or (part.page == page and part.y1 <= y):
+            first.append(part.model_copy())
+        elif part.page > page or (part.page == page and part.y0 >= y):
+            second.append(part.model_copy())
+        else:
+            first.append(part.model_copy(update={"y1": y}))
+            second.append(part.model_copy(update={"y0": y}))
+    if not first or not second:
+        raise ValueError("The split must leave crop regions on both sides")
+    return first, second
+
+
 def match_topic(topic, topics):
     if not topic or not topics:
         return None
     return next((t for t in topics if t.lower() == topic.lower()), None) or next((t for t in topics if topic.lower() in t.lower() or t.lower() in topic.lower()), None)
 
 
-async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None, topic=None, difficulty=None) -> Question:
+async def upload_question(job_id: str, img, label: str, parts, marks, flags, qid: str = None, topic=None, difficulty=None,
+                          related_labels=None) -> Question:
     path = await put_object(f"{APP_NAME}/jobs/{job_id}/{uuid.uuid4()}.png", to_png(img), "image/png")
-    return Question(id=qid or str(uuid.uuid4()), label=label, storage_path=path, parts=parts, marks=marks, flags=flags, topic=topic, difficulty=difficulty,
+    return Question(id=qid or str(uuid.uuid4()), label=label, related_labels=related_labels or [label], storage_path=path,
+                    parts=parts, marks=marks, flags=flags, topic=topic, difficulty=difficulty,
                     pages=sorted({p.page + 1 for p in parts}), width=img.width, height=img.height)
 
 
@@ -386,16 +467,22 @@ CROP_HISTORY = 20
 
 
 async def rebuild_question(job: Job, doc, label: str, parts, marks, flags, qid: str, reviewed: bool = False, topic=None,
-                           erase_applied=None, erase_status: str = "none", erase_manual=None, crop_history=None, difficulty=None) -> Question:
+                           erase_applied=None, erase_status: str = "none", erase_manual=None, crop_history=None, difficulty=None,
+                           annotations=None, related_labels=None, erase_white=None, memo_links=None) -> Question:
     applied = erase_applied or []
-    crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count))
+    crops = await asyncio.to_thread(crop_parts, doc, parts, {}, masks_from(applied, doc.page_count),
+                                    masks_from(erase_white or [], doc.page_count))
     col = job.content_col or None
     for c in crops:
         col = union_col(col, x_bounds(c))
-    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic, difficulty)
+    q = await upload_question(job.id, await asyncio.to_thread(finalize, crops, col), label, parts, marks, flags, qid, topic, difficulty,
+                              related_labels=related_labels)
     q.reviewed, q.erase_applied, q.erase_status = reviewed, applied, erase_status
     q.erase_manual = [b for b in (erase_manual or []) if b in applied]
+    q.erase_white = [b for b in (erase_white or []) if b in applied]
+    q.memo_links = memo_links or []
     q.crop_history = (crop_history or [])[-CROP_HISTORY:]
+    q.annotations = annotations or []
     return q
 
 
@@ -453,7 +540,8 @@ async def process_job(job_id: str):
             if doc_type == "question_paper" and not difficulty:
                 flags.append(DIFF_FLAG)
             img = await asyncio.to_thread(finalize, crops, col)
-            q = await upload_question(job_id, img, g["label"], g["parts"], marks, flags, topic=topic, difficulty=difficulty)
+            q = await upload_question(job_id, img, g["label"], g["parts"], marks, flags, topic=topic, difficulty=difficulty,
+                                      related_labels=g["related_labels"])
             if erase_proposals(Job(filename="", page_masks=page_masks), g["parts"]):
                 q.erase_status = "pending"
                 q.flags.append(ERASE_FLAG)

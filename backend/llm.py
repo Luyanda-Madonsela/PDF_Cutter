@@ -1,18 +1,22 @@
 import asyncio
 import base64
+import json
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 import io
+from urllib.request import Request, urlopen
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
-from core import db, LLM_KEY
+from core import db, LLM_KEY, OPENROUTER_KEY
 from auth import require_user
 
 SYSTEM = "You are a precise document layout analyser. Output only valid JSON."
 PROVIDERS = {
-    "emergent": {"label": "Emergent key (default)", "model": "gemini-3-flash-preview"},
+    "emergent": {"label": "Emergent key", "model": "gemini-3-flash-preview"},
     "gemini": {"label": "Google Gemini", "model": "gemini-3-flash-preview"},
     "openai": {"label": "OpenAI", "model": "gpt-5.6-terra"},
     "anthropic": {"label": "Anthropic Claude", "model": "claude-sonnet-5-5"},
@@ -21,22 +25,58 @@ PROVIDERS = {
 }
 NATIVE = {"gemini", "openai", "anthropic"}
 ai_api = APIRouter(prefix="/api/ai", dependencies=[Depends(require_user)])
+_openrouter_models_cache = []
+_openrouter_models_expiry = 0.0
+_openrouter_models_lock = threading.Lock()
 
 
 async def ai_settings() -> dict:
     doc = await db.settings.find_one({"_id": "ai"}) or {}
-    return {"provider": doc.get("provider", "emergent"), "models": doc.get("models", {}), "keys": doc.get("keys", {}),
+    return {"provider": doc.get("provider", "openrouter"), "models": doc.get("models", {}), "keys": doc.get("keys", {}),
             "base_url": doc.get("base_url", "")}
 
 
 def resolve(st: dict) -> dict:
-    """Active provider config; falls back to the Emergent key when the chosen provider has no key."""
+    """Resolve the selected provider, retaining the OpenRouter selection when its key is missing."""
     p = st["provider"]
     key = st["keys"].get(p)
-    if p == "emergent" or (not key and p != "compatible"):
+    if p == "openrouter" and not key:
+        key = OPENROUTER_KEY
+    if p == "emergent" or (not key and p not in {"compatible", "openrouter"}):
         return {"provider": "emergent", "model": PROVIDERS["emergent"]["model"], "key": LLM_KEY, "fallback": p != "emergent"}
     base = st["base_url"] if p == "compatible" else PROVIDERS[p].get("base_url")
     return {"provider": p, "model": st["models"].get(p) or PROVIDERS[p]["model"], "key": key or "none", "base_url": base, "fallback": False}
+
+
+def _provider_error(cfg: dict, exc: Exception) -> str:
+    provider_name = PROVIDERS.get(cfg["provider"], {}).get("label", cfg["provider"])
+    model_name = cfg.get("model") or ""
+    if is_invalid_api_key_error(exc):
+        return invalid_api_key_message(cfg)
+    key = (cfg.get("key") or "").strip()
+    if not key or key.lower() in {"none", "demo-dev-key", "demo", "changeme", "placeholder", "your-api-key", "invalid", "null"}:
+        variable = "OPENROUTER_API_KEY" if cfg["provider"] == "openrouter" else "EMERGENT_LLM_KEY"
+        return f"No valid API key configured for {provider_name}. Set {variable} or save a real API key in the AI settings before using the model."
+    return f"{provider_name} ({model_name}) failed: {exc}"
+
+
+def is_invalid_api_key_error(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return any(marker in message for marker in ("api_key_invalid", "api key not valid", "invalid api key"))
+
+
+def invalid_api_key_message(cfg: dict) -> str:
+    provider = cfg.get("provider", "")
+    if provider == "emergent":
+        return (
+            "Google rejected the API key used by the default AI provider. "
+            "In AI model settings, select a provider with a valid key, or replace EMERGENT_LLM_KEY in backend/.env."
+        )
+    label = PROVIDERS.get(provider, {}).get("label", provider)
+    return (
+        f"{label} rejected its API key. Replace the saved key in AI model settings "
+        "or update the provider's environment variable, then retry the failed document."
+    )
 
 
 def _mime(b64: str) -> str:
@@ -96,6 +136,8 @@ async def reserve(cfg: dict) -> float:
 
 
 async def complete(cfg: dict, prompt: str, img_b64: str, session_id: str) -> str:
+    if cfg["provider"] == "openrouter" and img_b64:
+        await validate_openrouter_image_model(cfg["model"])
     held = await reserve(cfg)
     try:
         return await _complete(cfg, prompt, img_b64, session_id)
@@ -142,10 +184,67 @@ def _mask(k: Optional[str]) -> Optional[str]:
 async def get_settings():
     st = await ai_settings()
     cfg = resolve(st)
+    keys = {p: st["keys"].get(p) for p in PROVIDERS if p != "emergent"}
+    if not keys.get("openrouter"):
+        keys["openrouter"] = OPENROUTER_KEY
     return {"provider": st["provider"], "models": st["models"], "base_url": st["base_url"],
-            "keys": {p: _mask(st["keys"].get(p)) for p in PROVIDERS if p != "emergent"},
+            "keys": {p: _mask(keys[p]) for p in keys},
             "providers": {p: {"label": v["label"], "default_model": v["model"]} for p, v in PROVIDERS.items()},
             "active": {"provider": cfg["provider"], "model": cfg["model"], "fallback": cfg["fallback"]}}
+
+
+def normalize_openrouter_models(payload: dict) -> list:
+    entries = payload.get("data")
+    if not isinstance(entries, list):
+        raise ValueError("OpenRouter returned an invalid model catalogue")
+    models = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            continue
+        architecture = entry.get("architecture")
+        input_modalities = architecture.get("input_modalities") if isinstance(architecture, dict) else []
+        input_modalities = input_modalities if isinstance(input_modalities, list) else []
+        models.append({
+            "id": entry["id"],
+            "name": str(entry.get("name") or entry["id"]),
+            "supports_image": any(
+                isinstance(modality, str) and modality.casefold() == "image"
+                for modality in input_modalities
+            ),
+        })
+    return sorted(models, key=lambda item: (item["name"].casefold(), item["id"]))
+
+
+def fetch_openrouter_models(refresh: bool = False) -> list:
+    global _openrouter_models_cache, _openrouter_models_expiry
+    with _openrouter_models_lock:
+        if not refresh and time.monotonic() < _openrouter_models_expiry:
+            return _openrouter_models_cache
+        request = Request("https://openrouter.ai/api/v1/models", headers={"Accept": "application/json"})
+        with urlopen(request, timeout=20) as response:
+            models = normalize_openrouter_models(json.load(response))
+        _openrouter_models_cache = models
+        _openrouter_models_expiry = time.monotonic() + 900
+        return models
+
+
+async def validate_openrouter_image_model(model_id: str) -> None:
+    models = await asyncio.to_thread(fetch_openrouter_models)
+    model = next((item for item in models if item["id"] == model_id), None)
+    if model is None:
+        raise RuntimeError(f"OpenRouter model {model_id} is not in the current model catalogue. Refresh the model list and select an available model.")
+    if not model["supports_image"]:
+        raise RuntimeError(
+            f"OpenRouter model {model_id} only supports text input. PaperCut needs image input to analyse uploaded pages; choose a model marked as supporting images."
+        )
+
+
+@ai_api.get("/models/openrouter")
+async def openrouter_models():
+    try:
+        return {"models": await asyncio.to_thread(fetch_openrouter_models)}
+    except Exception as exc:
+        raise HTTPException(502, f"Could not load OpenRouter models: {exc}")
 
 
 class AiSettingsIn(BaseModel):
@@ -193,7 +292,7 @@ async def test_connection():
         text = await complete(cfg, 'Read the image. Respond with ONLY JSON: {"ok": true, "first_label": "<the first sub-question number you see>"}',
                               _sample_image(), "ai-test")
     except Exception as e:
-        raise HTTPException(400, f"{PROVIDERS[cfg['provider']]['label']} ({cfg['model']}) failed: {str(e)[:300]}")
+        raise HTTPException(400, _provider_error(cfg, e))
     return {"ok": True, "provider": cfg["provider"], "model": cfg["model"], "fallback": cfg["fallback"], "reply": text[:300]}
 
 

@@ -1,14 +1,24 @@
+import asyncio
+import os
+import secrets
 import uuid
-import httpx
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token
+from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 from core import db
 
 auth_api = APIRouter(prefix="/api/auth")
-SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 SESSION_DAYS = 7
+GOOGLE_AUTH_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
 
 
 class User(BaseModel):
@@ -16,10 +26,6 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
-
-
-class SessionIn(BaseModel):
-    session_id: str
 
 
 def _token(request: Request) -> Optional[str]:
@@ -50,26 +56,132 @@ async def require_user(request: Request) -> User:
     return User(**user)
 
 
-@auth_api.post("/session")
-async def create_session(body: SessionIn, response: Response):
-    async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.get(SESSION_DATA_URL, headers={"X-Session-ID": body.session_id})
-    if r.status_code != 200:
-        raise HTTPException(401, "Invalid session id")
-    data = r.json()
-    existing = await db.users.find_one({"email": data["email"]}, {"_id": 0})
-    user_id = existing["user_id"] if existing else f"user_{uuid.uuid4().hex[:12]}"
+def _auth_flow():
+    required = ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_AUTH_REDIRECT_URI")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise HTTPException(503, f"Google sign-in is not configured: missing {', '.join(missing)}")
+    redirect_uri = os.environ["GOOGLE_AUTH_REDIRECT_URI"]
+    client_config = {"web": {
+        "client_id": os.environ["GOOGLE_CLIENT_ID"],
+        "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": [redirect_uri],
+    }}
+    return Flow.from_client_config(client_config, scopes=GOOGLE_AUTH_SCOPES, redirect_uri=redirect_uri)
+
+
+def _frontend_url():
+    frontend_url = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    if not frontend_url:
+        raise HTTPException(503, "Google sign-in is not configured: FRONTEND_URL is missing")
+    return frontend_url
+
+
+@auth_api.get("/google/login")
+async def google_login():
+    flow = _auth_flow()
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    authorization_url, _ = flow.authorization_url(
+        access_type="online",
+        prompt="select_account",
+        state=state,
+        nonce=nonce,
+        code_challenge_method="S256",
+    )
+    await db.auth_states.insert_one({
+        "_id": state,
+        "code_verifier": flow.code_verifier,
+        "nonce": nonce,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return RedirectResponse(authorization_url)
+
+
+@auth_api.get("/google/callback")
+async def google_callback(
+    state: Optional[str] = None,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    frontend_url = _frontend_url()
+    login_error = RedirectResponse(f"{frontend_url}/?auth=error")
+    if not state:
+        return login_error
+
+    auth_state = await db.auth_states.find_one_and_delete({"_id": state})
+    if not auth_state:
+        return login_error
+    if not code or error:
+        return login_error
+    created_at = auth_state.get("created_at")
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    if not isinstance(created_at, datetime):
+        return login_error
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - created_at > timedelta(minutes=10):
+        return login_error
+
+    try:
+        flow = _auth_flow()
+        flow.code_verifier = auth_state.get("code_verifier")
+        await asyncio.to_thread(flow.fetch_token, code=code)
+        claims = await asyncio.to_thread(
+            id_token.verify_oauth2_token,
+            flow.credentials.id_token,
+            GoogleRequest(),
+            os.environ["GOOGLE_CLIENT_ID"],
+        )
+        email = claims.get("email")
+        if (not email or not claims.get("email_verified") or not claims.get("sub")
+                or claims.get("nonce") != auth_state.get("nonce")):
+            return login_error
+    except Exception:
+        from core import logger
+        logger.warning("Google sign-in token exchange or verification failed", exc_info=True)
+        return login_error
+
     now = datetime.now(timezone.utc)
+    existing = await db.users.find_one(
+        {"$or": [{"google_sub": claims["sub"]}, {"email": email}]},
+        {"_id": 0},
+    )
+    user_id = existing["user_id"] if existing else f"user_{uuid.uuid4().hex[:12]}"
+    user_data = {
+        "google_sub": claims["sub"],
+        "email": email,
+        "name": claims.get("name") or email,
+        "picture": claims.get("picture"),
+    }
     await db.users.update_one(
         {"user_id": user_id},
-        {"$set": {"email": data["email"], "name": data["name"], "picture": data.get("picture")},
-         "$setOnInsert": {"user_id": user_id, "created_at": now}},
-        upsert=True)
-    await db.user_sessions.insert_one({"user_id": user_id, "session_token": data["session_token"],
-                                       "expires_at": now + timedelta(days=SESSION_DAYS), "created_at": now})
-    response.set_cookie("session_token", data["session_token"], httponly=True, secure=True, samesite="none",
-                        path="/", max_age=SESSION_DAYS * 86400)
-    return User(user_id=user_id, email=data["email"], name=data["name"], picture=data.get("picture"))
+        {"$set": user_data, "$setOnInsert": {"user_id": user_id, "created_at": now}},
+        upsert=True,
+    )
+    session_token = secrets.token_urlsafe(32)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": now + timedelta(days=SESSION_DAYS),
+        "created_at": now,
+    })
+
+    secure_cookie = frontend_url.startswith("https://")
+    response = RedirectResponse(f"{frontend_url}/")
+    response.set_cookie(
+        "session_token",
+        session_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="none" if secure_cookie else "lax",
+        path="/",
+        max_age=SESSION_DAYS * 86400,
+    )
+    return response
 
 
 @auth_api.get("/me")
@@ -82,5 +194,11 @@ async def logout(request: Request, response: Response):
     token = _token(request)
     if token:
         await db.user_sessions.delete_one({"session_token": token})
-    response.delete_cookie("session_token", path="/", secure=True, samesite="none")
+    secure_cookie = _frontend_url().startswith("https://")
+    response.delete_cookie(
+        "session_token",
+        path="/",
+        secure=secure_cookie,
+        samesite="none" if secure_cookie else "lax",
+    )
     return {"ok": True}

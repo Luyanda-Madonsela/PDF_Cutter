@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Search, Loader2, Download, ScanSearch, Check } from "lucide-react";
+import { Search, Loader2, Download, ScanSearch, Check, HardDrive, ShieldCheck, FolderOpen, ArrowUpRight } from "lucide-react";
 import { toast } from "sonner";
-import { driveSearch, driveImport, driveScan, driveImportStatus } from "@/lib/api";
+import { driveSearch, driveImport, driveScan, driveImportStatus, driveStatus, driveConnect } from "@/lib/api";
 
 const RUNNING = ["queued", "scanning", "importing"];
 
@@ -36,14 +36,46 @@ export const DriveImport = ({ onImported }) => {
   const [busy, setBusy] = useState(false);
   const [st, setSt] = useState(null);
   const [limit, setLimit] = useState(200);
+  const [connection, setConnection] = useState(null);
+  const [connectionError, setConnectionError] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   const poll = () => driveImportStatus().then(setSt).catch(() => {});
-  useEffect(() => { poll(); }, []);
+  const loadConnection = () => {
+    setConnectionError(false);
+    return driveStatus()
+      .then(setConnection)
+      .catch((e) => {
+        setConnectionError(true);
+        toast.error(e.response?.data?.detail || "Could not check Google Drive connection");
+      });
+  };
+  useEffect(() => { loadConnection(); }, []);
+  useEffect(() => {
+    const updateConnection = (event) => {
+      setConnection(event.detail);
+      setConnectionError(false);
+    };
+    window.addEventListener("drive-status-updated", updateConnection);
+    return () => window.removeEventListener("drive-status-updated", updateConnection);
+  }, []);
+  useEffect(() => { if (connection?.connected) poll(); }, [connection?.connected]);
   useEffect(() => {
     if (!RUNNING.includes(st?.status)) return;
     const t = setInterval(() => { poll(); onImported(); }, 4000);
     return () => clearInterval(t);
   }, [st?.status, onImported]);
+
+  const connect = async () => {
+    setConnecting(true);
+    try {
+      const { authorization_url } = await driveConnect();
+      window.location.assign(authorization_url);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not start Google Drive connection");
+      setConnecting(false);
+    }
+  };
 
   const search = async (token) => {
     setBusy(true);
@@ -56,8 +88,79 @@ export const DriveImport = ({ onImported }) => {
   const toggle = (id) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const run = async (fn, msg) => { try { await fn(); toast.success(msg); setPicked(new Set()); poll(); } catch (e) { toast.error(e.response?.data?.detail || "Could not start import"); } };
 
+  if (!connection && !connectionError) {
+    return (
+      <section data-testid="drive-connect-screen" aria-busy="true" className="pc-card p-8 sm:p-12 pc-rise">
+        <div className="mx-auto max-w-md text-center space-y-4">
+          <div className="mx-auto h-14 w-14 rounded-2xl bg-[var(--pc-surface2)] border border-[var(--pc-border)] grid place-items-center">
+            <Loader2 className="h-6 w-6 animate-spin text-[var(--pc-amber)]" />
+          </div>
+          <p className="font-mono text-sm text-[var(--pc-text2)]">Checking your Google Drive connection…</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (connectionError) return null;
+
+  if (!connection.connected) {
+    return (
+      <section data-testid="drive-connect-screen" className="pc-card overflow-hidden pc-rise">
+        <div className="grid lg:grid-cols-[1.25fr_0.75fr]">
+          <div className="p-7 sm:p-10 lg:p-12">
+            <div className="pc-overline">Google Drive integration</div>
+            <div className="mt-6 flex items-center gap-4">
+              <div className="h-14 w-14 rounded-2xl bg-[#0F9D58]/15 border border-[#0F9D58]/30 grid place-items-center shrink-0">
+                <HardDrive className="h-7 w-7 text-[#34A853]" />
+              </div>
+              <div>
+                <h1 className="font-heading text-3xl sm:text-4xl font-extrabold tracking-tight">Bring your papers together.</h1>
+              </div>
+            </div>
+            <p className="mt-5 max-w-xl text-[var(--pc-text2)] leading-relaxed">
+              Connect Google Drive to import past papers directly into PaperCut, or send finished sets back to your Drive.
+            </p>
+            <button data-testid="drive-main-connect-button" disabled={connecting} onClick={connect} className="pc-btn-primary mt-7 text-sm">
+              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />}
+              {connecting ? "Connecting…" : "Connect Google Drive"}
+              {!connecting && <ArrowUpRight className="h-4 w-4" />}
+            </button>
+            <div className="mt-4 flex items-start gap-2 text-xs text-[var(--pc-muted)]">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--pc-emerald)]" />
+              <p>You’ll be redirected to Google to choose an account and approve access. PaperCut never sees your Google password.</p>
+            </div>
+          </div>
+
+          <div className="border-t lg:border-t-0 lg:border-l border-[var(--pc-border)] bg-[var(--pc-surface2)]/40 p-7 sm:p-10">
+            <h2 className="font-heading text-lg font-bold">What you can do</h2>
+            <ul className="mt-6 space-y-5">
+              <li className="flex gap-3">
+                <span className="h-9 w-9 rounded-lg bg-[var(--pc-amber)]/10 text-[var(--pc-amber)] grid place-items-center shrink-0"><FolderOpen className="h-4 w-4" /></span>
+                <span><strong className="block text-sm">Find PDFs in Drive</strong><span className="text-xs text-[var(--pc-text2)]">Search by name or scan for new papers to import.</span></span>
+              </li>
+              <li className="flex gap-3">
+                <span className="h-9 w-9 rounded-lg bg-[var(--pc-emerald)]/10 text-[var(--pc-emerald)] grid place-items-center shrink-0"><HardDrive className="h-4 w-4" /></span>
+                <span><strong className="block text-sm">Keep your files in sync</strong><span className="text-xs text-[var(--pc-text2)]">Send completed paper sets to your chosen Drive folder.</span></span>
+              </li>
+            </ul>
+            <div className="mt-7 border-t border-[var(--pc-border)] pt-5 text-xs text-[var(--pc-muted)]">
+              You can disconnect at any time from the Drive button in the top bar.
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div data-testid="drive-import-panel" className="pc-card p-6 sm:p-8 pc-rise space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--pc-emerald)]/25 bg-[var(--pc-emerald)]/5 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-[var(--pc-emerald)]">
+          <Check className="h-4 w-4" />
+          <span>Google Drive connected{connection.connected_by ? ` · ${connection.connected_by}` : ""}</span>
+        </div>
+        <span className="font-mono text-xs text-[var(--pc-muted)] truncate">{connection.root}</span>
+      </div>
       <div className="pc-overline">Import PDFs from Google Drive</div>
       <form onSubmit={(e) => { e.preventDefault(); search(); }} className="flex gap-2">
         <input data-testid="drive-search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by file name, e.g. Mathematics P1 Nov 2019"

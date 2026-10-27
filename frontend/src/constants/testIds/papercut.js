@@ -35,6 +35,8 @@ export const PC = {
 	deleteQuestion: 'delete-question-button',
 	cropSave: 'crop-save-button',
 	cropAddPage: 'crop-add-page-button',
+	cropSplit: 'crop-split-button',
+	cropSplitLabel: 'crop-split-label',
 	historySection: 'history-section',
 	historyEmpty: 'history-empty',
 	queueCounts: 'queue-counts',

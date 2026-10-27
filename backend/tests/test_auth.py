@@ -1,4 +1,4 @@
-"""Auth gating tests for PaperCut (Emergent Google Auth).
+"""Auth gating tests for PaperCut (Google OAuth).
 
 Uses an isolated requests.Session so the module-level requests.get monkey-patch
 in test_papercut_api.py cannot leak Bearer headers into these tests.
@@ -108,11 +108,6 @@ def test_invalid_bearer_token_401():
     s = requests.Session()
     s.headers.update({"Authorization": "Bearer this-is-not-a-real-token"})
     assert s.get(f"{API}/auth/me").status_code == 401
-
-
-def test_create_session_invalid_session_id_401():
-    r = unauth.post(f"{API}/auth/session", json={"session_id": "definitely-not-valid-xyz"})
-    assert r.status_code == 401
 
 
 def test_logout_invalidates_session(throwaway_session, mongo):

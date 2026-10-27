@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Cpu, Loader2, PlugZap } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { getAiSettings, saveAiSettings, testAi } from "@/lib/api";
+import { getAiSettings, getOpenrouterModels, saveAiSettings, testAi } from "@/lib/api";
 import { PC } from "@/constants/testIds";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AiUsage } from "./AiUsage";
@@ -15,11 +15,28 @@ const KEY_HELP = {
 
 const AiForm = ({ st, onSaved }) => {
   const [provider, setProvider] = useState(st.provider);
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(st.models[provider] || st.providers[provider]?.default_model || "");
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(st.base_url || "");
   const [busy, setBusy] = useState("");
-  useEffect(() => { setModel(st.models[provider] || ""); setKey(""); }, [provider, st.models]);
+  const [openrouterModels, setOpenrouterModels] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelsAttempt, setModelsAttempt] = useState(0);
+  const selectedOpenrouterModel = openrouterModels.find((entry) => entry.id === model);
+  const selectedModelSupportsImages = provider !== "openrouter" || selectedOpenrouterModel?.supports_image === true;
+  useEffect(() => { setModel(st.models[provider] || st.providers[provider]?.default_model || ""); setKey(""); }, [provider, st.models, st.providers]);
+  useEffect(() => {
+    if (provider !== "openrouter") return undefined;
+    let active = true;
+    setLoadingModels(true);
+    setModelsError("");
+    getOpenrouterModels()
+      .then((result) => { if (active) setOpenrouterModels(result.models); })
+      .catch((error) => { if (active) setModelsError(error.response?.data?.detail || "Could not load OpenRouter models"); })
+      .finally(() => { if (active) setLoadingModels(false); });
+    return () => { active = false; };
+  }, [provider, modelsAttempt]);
   const own = provider !== "emergent";
   const run = async (k, fn) => { setBusy(k); try { await fn(); } catch (e) { toast.error(e.response?.data?.detail || "Something went wrong"); } setBusy(""); };
   const payload = () => ({ provider, ...(own ? { model, ...(key ? { key } : {}) } : {}), ...(provider === "compatible" ? { base_url: baseUrl } : {}) });
@@ -39,7 +56,33 @@ const AiForm = ({ st, onSaved }) => {
       {own && (
         <>
           <label className="text-xs font-mono text-[var(--pc-muted)]" htmlFor="ai-model-input">Model</label>
-          <input id="ai-model-input" data-testid="ai-model-input" value={model} onChange={(e) => setModel(e.target.value)} placeholder={st.providers[provider].default_model || "e.g. qwen2.5vl"} className={field} />
+          {provider === "openrouter" ? (
+            <>
+              <select id="ai-model-input" data-testid="ai-model-input" value={model} onChange={(e) => setModel(e.target.value)} className={field}>
+                <option value="">{loadingModels ? "Loading OpenRouter models…" : "Select an OpenRouter model"}</option>
+                {model && !selectedOpenrouterModel && <option value={model}>{model} (capability unknown)</option>}
+                {openrouterModels.map((entry) => (
+                  <option key={entry.id} value={entry.id} disabled={!entry.supports_image}>
+                    {entry.name} — {entry.id}{entry.supports_image ? "" : " (text only; unsupported)"}
+                  </option>
+                ))}
+              </select>
+              {!loadingModels && !modelsError && provider === "openrouter" && model && !selectedModelSupportsImages && (
+                <p role="alert" className="text-xs text-amber-400">
+                  {selectedOpenrouterModel
+                    ? "This model cannot process images. PaperCut needs a vision model; text-only OpenRouter models are unavailable for document processing."
+                    : "This model's image support could not be verified. Refresh the model list and select a model marked as supporting images."}
+                </p>
+              )}
+              {modelsError && (
+                <p role="alert" className="text-xs text-red-400">
+                  {modelsError} <button type="button" className="underline" onClick={() => setModelsAttempt((attempt) => attempt + 1)}>Retry</button>
+                </p>
+              )}
+            </>
+          ) : (
+            <input id="ai-model-input" data-testid="ai-model-input" value={model} onChange={(e) => setModel(e.target.value)} placeholder={st.providers[provider].default_model || "e.g. qwen2.5vl"} className={field} />
+          )}
           <label className="text-xs font-mono text-[var(--pc-muted)]" htmlFor="ai-key-input">API key {st.keys[provider] ? `(saved ${st.keys[provider]})` : ""}: {KEY_HELP[provider]}</label>
           <input id="ai-key-input" data-testid="ai-key-input" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
             placeholder={st.keys[provider] ? "Leave empty to keep the saved key" : "Paste your key"} className={field} />
@@ -51,10 +94,10 @@ const AiForm = ({ st, onSaved }) => {
           <input id="ai-baseurl-input" data-testid="ai-baseurl-input" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://my-ollama.example.com/v1" className={field} />
         </>
       )}
-      <p className="text-xs text-[var(--pc-muted)]">The model must be able to read images. If a provider has no key yet, PaperCut keeps using the Emergent key.</p>
+      <p className="text-xs text-[var(--pc-muted)]">The model must be able to read images. OpenRouter is the default provider; add its API key in settings or configure OPENROUTER_API_KEY in backend/.env.</p>
       <div className="flex gap-2 flex-wrap pt-1">
-        <button data-testid="ai-save-button" disabled={!!busy} onClick={save} className="pc-btn-primary text-sm">{busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Save</button>
-        <button data-testid="ai-test-button" disabled={!!busy} onClick={test} className="pc-btn-secondary text-sm">
+        <button data-testid="ai-save-button" disabled={!!busy || !selectedModelSupportsImages} onClick={save} className="pc-btn-primary text-sm">{busy === "save" && <Loader2 className="h-4 w-4 animate-spin" />} Save</button>
+        <button data-testid="ai-test-button" disabled={!!busy || !selectedModelSupportsImages} onClick={test} className="pc-btn-secondary text-sm">
           {busy === "test" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />} Save & test
         </button>
       </div>
